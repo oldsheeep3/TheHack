@@ -1,7 +1,7 @@
 ---
 name: agent-A-002-media-engine
-status: planning
-pid:
+status: doing
+pid: 165377
 agent_cli: sonnet
 ---
 
