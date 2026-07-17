@@ -1,3 +1,7 @@
 /*/.git/
 **/softswitcher*/.git/
 /.history
+
+# .NET build artifacts
+[Bb]in/
+[Oo]bj/

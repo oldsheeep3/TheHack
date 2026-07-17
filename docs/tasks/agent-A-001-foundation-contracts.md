@@ -1,7 +1,7 @@
 ---
 name: agent-A-001-foundation-contracts
-status: planning
-pid:
+status: doing
+pid: 153144
 agent_cli: sonnet
 ---
 
