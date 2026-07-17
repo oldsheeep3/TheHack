@@ -7,6 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Lets this class library host Kestrel/minimal APIs without switching to Sdk.Web. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Switcher.Contracts\Switcher.Contracts.csproj" />
   </ItemGroup>
 
