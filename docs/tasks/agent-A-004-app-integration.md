@@ -1,6 +1,6 @@
 ---
 name: agent-A-004-app-integration
-status: reviewing
+status: doing
 pid: 207459
 agent_cli: sonnet
 ---
@@ -45,3 +45,24 @@ agent_cli: sonnet
 
 ## 参照
 - 仕様: `docs/specs/pc-switcher-app.md` 全体, `docs/specs/00-system-overview.md` §3, §4
+
+---
+
+## レビュー指摘（要修正 / fixing）— 2026-07-17 by Opus 親
+
+コード品質・配線・並行性・仕様適合はすべて良好で合格水準。ただし**統合フェーズの完了条件「`dotnet test` 全プロジェクト green」がソリューション単位で検証できない**問題が1点あり、これを修正すること。
+
+### 指摘1（必須）: テストプロジェクトが `HybridSwitcher.sln` に未登録
+- 現状 `dotnet sln HybridSwitcher.sln list` には `tests/Switcher.Contracts.Tests` の1件のみが登録され、`Switcher.Web.Tests` / `Switcher.Media.Tests` / `Switcher.Atem.Tests` / `Switcher.VirtualCam.Tests` の4件がソリューションから漏れている。
+- このため `dotnet test HybridSwitcher.sln` はテスト4件しか実行せず、残り92件（Web18 / Media30 / Atem22 / VCam22）を**サイレントにスキップ**する。CIで回帰を検知できない。
+- **対応**: 本フェーズは `.sln` の最小編集が許可されている。以下を実行して4プロジェクトを登録し直すこと（各テストは個別実行では全て green を確認済み）:
+  ```bash
+  dotnet sln HybridSwitcher.sln add \
+    tests/Switcher.Web.Tests/Switcher.Web.Tests.csproj \
+    tests/Switcher.Media.Tests/Switcher.Media.Tests.csproj \
+    tests/Switcher.Atem.Tests/Switcher.Atem.Tests.csproj \
+    tests/Switcher.VirtualCam.Tests/Switcher.VirtualCam.Tests.csproj
+  ```
+- **検証**: `dotnet test HybridSwitcher.sln` が5プロジェクト・計96件を実行し全て green になること。その後コミットして再度 `reviewing` へ。
+
+（参考: 実装コード自体の追加修正は不要。上記の登録漏れのみ是正すればよい。）
