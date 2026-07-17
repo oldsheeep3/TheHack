@@ -1,0 +1,9 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+A1,RaspberryPi_Pico_Common_THT,1,RaspberryPi_Pico_W,
+"D1, D10, D13, D14, D2, D5, D6, D9",D_SOD-123,8,1N4148W,
+"D11, D12, D15, D16, D3, D4, D7, D8",MX_SK6812MINI-E,8,SK6812MINI-E,
+J1,USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal,1,USB_C_Receptacle_USB2.0_14P,
+R1,1206,1,1k,
+R2,1206,1,10k,
+"SW1, SW2, SW3, SW4, SW5, SW6, SW7, SW8",CherryMX_1.00u,8,CherryMX,
+U1,SSOP-10-1EP_3.9x4.9mm_P1mm_EP2.1x3.3mm,1,CH224K,
