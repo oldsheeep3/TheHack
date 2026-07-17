@@ -1,7 +1,7 @@
 ---
 name: agent-A-003-atem-control
-status: planning
-pid:
+status: doing
+pid: 196024
 agent_cli: sonnet
 ---
 
