@@ -1,6 +1,6 @@
 ---
 name: agent-P-001-firmware-scaffold
-status: doing
+status: reviewing
 pid: 160479
 agent_cli: sonnet
 ---
