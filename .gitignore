@@ -5,3 +5,8 @@
 # .NET build artifacts
 [Bb]in/
 [Oo]bj/
+
+# Pico firmware build artifacts
+/firmware/**/build/
+firmware/pico2w-controller/test/test_config
+firmware/pico2w-controller/test/test_config_sub

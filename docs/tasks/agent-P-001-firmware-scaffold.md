@@ -1,7 +1,7 @@
 ---
 name: agent-P-001-firmware-scaffold
-status: planning
-pid:
+status: doing
+pid: 160479
 agent_cli: sonnet
 ---
 
