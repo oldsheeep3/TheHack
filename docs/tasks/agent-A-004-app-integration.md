@@ -1,7 +1,7 @@
 ---
 name: agent-A-004-app-integration
-status: planning
-pid:
+status: reviewing
+pid: 207459
 agent_cli: sonnet
 ---
 

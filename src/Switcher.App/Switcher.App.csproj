@@ -6,11 +6,28 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Switcher.Contracts\Switcher.Contracts.csproj" />
+    <ProjectReference Include="..\Switcher.Media\Switcher.Media.csproj" />
+    <ProjectReference Include="..\Switcher.Web\Switcher.Web.csproj" />
+    <ProjectReference Include="..\Switcher.Atem\Switcher.Atem.csproj" />
+    <ProjectReference Include="..\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.18" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.18" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="9.0.18" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
