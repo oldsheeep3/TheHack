@@ -158,8 +158,8 @@ export function ConfigTab(): JSX.Element {
         ) : (
           <ul className="flex flex-col gap-2">
             {sources.map((source) => {
-              const isPgm = tally?.active_pgm.includes(source.channel) ?? false
-              const isPvw = tally?.active_pvw.includes(source.channel) ?? false
+              const isPgm = tally?.active_pgm1.includes(source.channel) ?? false
+              const isPvw = tally?.active_pvw1.includes(source.channel) ?? false
               return (
                 <li key={source.channel}>
                   <button

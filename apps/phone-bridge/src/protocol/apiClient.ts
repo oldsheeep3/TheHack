@@ -1,4 +1,14 @@
-import type { ConfigChangeRequest, SourceInfo, TallyState } from './types'
+import type {
+  ConfigChangeRequest,
+  ModulesConfig,
+  MultiviewConfig,
+  OutputsConfig,
+  PicoNetworkConfig,
+  ProgramRequest,
+  SourceDefinition,
+  SourceInfo,
+  TallyState,
+} from './types'
 
 export const DEFAULT_API_PORT = 8080
 
@@ -39,21 +49,53 @@ export class ApiClient {
     return this.request<SourceInfo[]>('GET', '/api/v1/sources', undefined, signal)
   }
 
+  async addSource(source: SourceDefinition, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('POST', '/api/v1/sources', source, signal)
+  }
+
+  async updateSource(id: string, source: SourceDefinition, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('PUT', `/api/v1/sources/${encodeURIComponent(id)}`, source, signal)
+  }
+
+  async deleteSource(id: string, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('DELETE', `/api/v1/sources/${encodeURIComponent(id)}`, undefined, signal)
+  }
+
   async updateConfig(request: ConfigChangeRequest, signal?: AbortSignal): Promise<void> {
     await this.request<void>('POST', '/api/v1/config', request, signal)
   }
 
+  async applyProgram(request: ProgramRequest, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('POST', '/api/v1/program', request, signal)
+  }
+
+  async setMultiview(config: MultiviewConfig, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('PUT', '/api/v1/multiview', config, signal)
+  }
+
+  async setOutputs(config: OutputsConfig, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('PUT', '/api/v1/outputs', config, signal)
+  }
+
+  async setModules(config: ModulesConfig, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('PUT', '/api/v1/modules', config, signal)
+  }
+
+  async setPicoNetwork(config: PicoNetworkConfig, signal?: AbortSignal): Promise<void> {
+    await this.request<void>('PUT', '/api/v1/pico/network', config, signal)
+  }
+
   /**
-   * Polls the last-known tally state (§4.3). The PC's primary tally path is a
-   * UDP broadcast browsers cannot receive, so this assumes a small REST mirror
-   * at `GET /api/v1/tally`; see phone-bridge README for the integration note.
+   * Polls the last-known tally state (§4.3, 2-bus payload). The PC's primary
+   * tally path is a UDP broadcast browsers cannot receive, so this assumes a
+   * small REST mirror at `GET /api/v1/tally`; see phone-bridge README.
    */
   async getTallyState(signal?: AbortSignal): Promise<TallyState> {
     return this.request<TallyState>('GET', '/api/v1/tally', undefined, signal)
   }
 
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     body?: unknown,
     signal?: AbortSignal,
