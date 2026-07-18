@@ -1,6 +1,6 @@
 ---
 name: agent-W-003-config-ui
-status: reviewing
+status: done
 pid: 325150
 agent_cli: sonnet
 ---
