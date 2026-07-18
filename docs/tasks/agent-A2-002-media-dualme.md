@@ -1,6 +1,6 @@
 ---
 name: agent-A2-002-media-dualme
-status: doing
+status: done
 pid: 369701
 agent_cli: sonnet
 ---

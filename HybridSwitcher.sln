@@ -33,6 +33,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Switcher.Hid", "src\Switche
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Switcher.Hid.Tests", "tests\Switcher.Hid.Tests\Switcher.Hid.Tests.csproj", "{0A99A503-5A2C-4584-AC38-93047528848E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Switcher.App.Tests", "tests\Switcher.App.Tests\Switcher.App.Tests.csproj", "{EBB715EC-9051-4ADA-B4D8-791566DADF8A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -199,6 +201,18 @@ Global
 		{0A99A503-5A2C-4584-AC38-93047528848E}.Release|x64.Build.0 = Release|Any CPU
 		{0A99A503-5A2C-4584-AC38-93047528848E}.Release|x86.ActiveCfg = Release|Any CPU
 		{0A99A503-5A2C-4584-AC38-93047528848E}.Release|x86.Build.0 = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|x64.Build.0 = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Debug|x86.Build.0 = Debug|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|x64.ActiveCfg = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|x64.Build.0 = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|x86.ActiveCfg = Release|Any CPU
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -217,5 +231,6 @@ Global
 		{129DF1D6-E85A-4F8F-8D2D-3E318FDE9CDD} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{79C5E203-FCD9-4570-9AD7-85A600BE2A84} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{0A99A503-5A2C-4584-AC38-93047528848E} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{EBB715EC-9051-4ADA-B4D8-791566DADF8A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

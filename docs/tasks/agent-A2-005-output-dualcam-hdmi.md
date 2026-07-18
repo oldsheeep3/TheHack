@@ -1,6 +1,6 @@
 ---
 name: agent-A2-005-output-dualcam-hdmi
-status: reviewing
+status: done
 pid: 414520
 agent_cli: sonnet
 ---

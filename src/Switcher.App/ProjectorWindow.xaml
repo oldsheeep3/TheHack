@@ -7,7 +7,5 @@
         ResizeMode="NoResize"
         Topmost="True"
         ShowInTaskbar="False">
-    <Grid>
-        <Image x:Name="ProgramImage" Stretch="Uniform" />
-    </Grid>
+    <Grid />
 </Window>

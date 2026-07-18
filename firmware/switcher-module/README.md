@@ -29,18 +29,25 @@ firmware/switcher-module/
 │   │                            # ADC生値→0..255スケーリング(移動平均+デッドバンド)純粋関数 (ホストテスト対象)
 │   ├── backlight.h / backlight.c
 │   │                            # SK6812×4 800kHz GRBビットバン駆動 (GPIO依存, module_hooks strong実装)
-│   └── sk6812_frame.h / sk6812_frame.c
-│                                # RGB→GRBフレーム組み立て純粋関数 (GPIO非依存, ホストテスト対象)
+│   ├── sk6812_frame.h / sk6812_frame.c
+│   │                            # RGB→GRBフレーム組み立て純粋関数 (GPIO非依存, ホストテスト対象)
+│   ├── i2c_regs.h / i2c_regs.c
+│   │                            # I2Cレジスタマップの純粋部(領域判定・STATE/INFOバイト生成・
+│   │                            # BACKLIGHT受領完了判定, ch32v003fun非依存, ホストテスト対象)
+│   └── i2c_slave.h / i2c_slave.c
+│                                # I2C1スレーブ初期化 + ISR(レジスタポインタ確定・1バイト授受・
+│                                # 受信バッファ格納のみ) (I2C1依存, module_hooks strong実装)
 └── test/                      # ホスト(native)ビルド用ユニットテスト (ch32v003fun/クロスツールチェーン非依存)
     ├── Makefile
     ├── test_module_config.c
     ├── test_module_index.c
     ├── test_switches.c
     ├── test_adc_scale.c
-    └── test_sk6812_frame.c
+    ├── test_sk6812_frame.c
+    └── test_i2c_regs.c
 ```
 
-`switches_*` は M-002 で実装済み（`switches.c` がGPIO走査、`switches_debounce.c` が純粋デバウンス状態機械）。`adc_*` / `backlight_*` は本タスク(M-003)で実装済み（`adc.c` がVR_SRC1/VR_SRC2のADC走査、`adc_scale.c` が純粋スケーリング、`backlight.c` がSK6812のビットバン駆動、`sk6812_frame.c` が純粋なRGB→GRBフレーム組み立て）。`i2c_slave_*` の実処理は後続タスク（M-004）が対応する `src/*.c` を追加し、`module_hooks.h` の関数を strong 定義することで結線される。それまでは `module_hooks.c` の weak no-op が呼ばれる。
+`switches_*` は M-002 で実装済み（`switches.c` がGPIO走査、`switches_debounce.c` が純粋デバウンス状態機械）。`adc_*` / `backlight_*` は M-003 で実装済み（`adc.c` がVR_SRC1/VR_SRC2のADC走査、`adc_scale.c` が純粋スケーリング、`backlight.c` がSK6812のビットバン駆動、`sk6812_frame.c` が純粋なRGB→GRBフレーム組み立て）。`i2c_slave_*` / `i2c_regs_*` は本タスク(M-004)で実装済み（`i2c_regs.c` がレジスタ領域判定・バイト内容生成の純粋部、`i2c_slave.c` がI2C1スレーブ初期化とISR）。これにより `module_hooks.h` の全関数が strong 定義され、`module_hooks.c` の weak no-op は呼ばれなくなる。
 
 ## SWマトリクス・デバウンス
 
@@ -57,7 +64,22 @@ firmware/switcher-module/
 ## モジュール番号とI2Cアドレス
 
 - モジュール番号（0..`MAX_MODULES`-1 = 0..7）は、抵抗ID方式でモジュールごとに異なる電圧を作り、1本のADCピン（`MODULE_STRAP_ADC_CHANNEL`）で読み取って `MAX_MODULES` 個のバケットに分類することで決定する（`module_index_from_strap_adc()`、純粋関数、ホストテスト済み）。実機のストラップ配線・抵抗値はHW確定後に決定するため、`get_module_index()`（`src/module_index.c`）は現状 module 0 固定のプレースホルダ実装であり、実ADC結線は M-003（`adc.c`）統合時に行う。
-- I2Cスレーブアドレスは `I2C_BASE_ADDR(0x30) + module_index` = `0x30..0x37`（`i2c_slave_address_for_module()`、親仕様書 §4.5）。
+- I2Cスレーブアドレスは `I2C_BASE_ADDR(0x30) + module_index` = `0x30..0x37`（`i2c_slave_address_for_module()`、親仕様書 §4.5）。`i2c_slave_init()`（`src/i2c_slave.c`）が起動時に `get_module_index()` の結果からこのアドレスを算出し `I2C1->OADDR1` に設定する。7bitアドレスのため、モジュールが最大8台（`MAX_MODULES`）を超えて同一バスに存在することはない前提。
+
+## I2Cレジスタマップ（親仕様書 §4.5, `src/i2c_regs.c`/`src/i2c_slave.c`）
+
+Pico 2W（マスター）から見た、モジュール（スレーブ, アドレス `0x30..0x37`）のレジスタ一覧。レジスタポインタ方式（先頭バイトでレジスタアドレスを指定し、以降を連続read/writeする一般的なI2Cデバイス方式）に従う。
+
+| アドレス | 方向 | 長さ | 内容 |
+| --- | --- | --- | --- |
+| `0x00` STATE | read | 3B | `[0]` SW状態(下位4bit, `SW_BIT_INDEX(row,col)`準拠, 上位4bitは0埋め) / `[1]` VR_SRC1(0..255) / `[2]` VR_SRC2(0..255) |
+| `0x10` BACKLIGHT | write | 12B | 4灯分RGB（1灯3バイト×4, 受領順そのまま）。モジュール側で SK6812 GRB へ変換（`sk6812_frame_from_rgb()`）して駆動する |
+| `0xF0` INFO | read | 4B | `[0..1]` firmware version(major/minor) / `[2]` capabilities（未定義ビットは0） / `[3]` module HW rev |
+
+- STATEは `i2c_slave_task()` が毎ループ `switches_get_state()`/`adc_get_vr()` から再構築してスナップショットへ反映する（ISRは読み出し時にこのスナップショットをそのまま返すのみ）。
+- BACKLIGHTはレジスタ先頭(`0x10`)から過不足なく12バイト受領した場合のみ（`i2c_regs_backlight_write_is_complete()`）受領完了フラグを立て、`i2c_slave_task()` がメインループ側で `backlight_set_rgb()` へ反映する。途中書込み・長さ不足の場合は無視し、直前の状態を維持する。
+- 上記3領域以外のレジスタアドレスへの書込み、およびSTATE/INFO（read専用）への書込みは無視する（NACKはせず、データを保持しないだけ）。範囲外read（未定義領域からの読み出し）は `0x00` を返す。
+- I2C ISR（`I2C1_EV_IRQHandler`）はレジスタポインタ確定・1バイト授受・BACKLIGHT受信バッファへの格納のみを行い、SWスキャン/ADC読取/SK6812駆動は行わない（メインループの `switches_task()`/`adc_task()`/`backlight_task()` が担う）。ISRとメインループ間の共有（STATEスナップショット・BACKLIGHT受信バッファ・受領完了フラグ）は `__disable_irq()`/`__enable_irq()` で保護した volatile 変数で安全化している。
 
 ## クロスビルド（`ch32v003fun` ツールチェーン必要）
 
@@ -89,6 +111,33 @@ I/O に依存しない純粋ロジック（`module_config.h` の定数、ADC生�
 cd firmware/switcher-module/test
 make        # ビルド + 実行。全テスト green で終了コード0
 ```
+
+## 実機I2C確認手順
+
+`i2c_slave.c` のI2C1スレーブ動作（ISR/レジスタマップ）は、この開発環境に実機（CH32V003・I2Cマスター）が無いため**未検証**。書き込み後は以下の手順で確認する:
+
+1. モジュールのストラップ抵抗でモジュール番号（0..7）を設定し、I2C `SDA`/`SCL`（PC1/PC2固定）をマスター（`../pico2w-controller/` 側の `MODULE_I2C_SDA_PIN`/`MODULE_I2C_SCL_PIN`、または汎用I2Cアダプタ）へ結線する。プルアップ抵抗（SDA/SCLとも）が回路上にあることを確認する。
+2. アドレス応答確認: `i2c-tools`（Linux）等でバススキャンし、`0x30 + module_index` の位置にモジュールが応答することを確認する。
+
+   ```sh
+   i2cdetect -y <bus番号>
+   ```
+
+3. STATE(`0x00`, read 3B)確認: SWを1つ押下・VRを回しながら読み出し、`[0]`（SW下位4bit）が押下中のSWビットのみ立つこと、`[1]`/`[2]`（VR_SRC1/VR_SRC2）がVR操作に追従して0..255で変化することを確認する。
+
+   ```sh
+   i2cget -y <bus番号> 0x30 0x00 b   # レジスタ0x00から連続読出しできない簡易ツールの場合は
+                                       # i2ctransfer 等でwrite(0x00)+read(3)の1トランザクションにする
+   ```
+
+4. BACKLIGHT(`0x10`, write 12B)確認: 4灯分RGB（12バイト、途中で分割しない1トランザクション）を書き込み、4灯すべてが指定色・指定順（送出順どおり）で点灯することを目視確認する。12バイト未満/レジスタ先頭以外からの書込みでは反映されない（無視される）ことも確認する。
+
+   ```sh
+   i2cset -y <bus番号> 0x30 0x10 <R0> <G0> <B0> ... <R3> <G3> <B3> i
+   ```
+
+5. INFO(`0xF0`, read 4B)確認: `[0..1]`=firmware version（`I2C_REGS_FW_VERSION_MAJOR`/`MINOR`）、`[2]`=capabilities（現状0）、`[3]`=HW rev（現状0, プレースホルダ）と一致することを確認する。
+6. 複数モジュール（最大8台）を同一バスに接続した状態で、1台のSDA/SCLを意図的に切断/短絡させても、他モジュールのSTATE読み出しが継続すること（マスター側 `i2c_modules.c` のタイムアウト/スキップにより1モジュール不通が他へ波及しないこと）を確認する。
 
 ## 参照
 

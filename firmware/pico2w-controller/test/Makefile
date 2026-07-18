@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_config test_config_sub test_state_agg test_backlight test_settings
+TESTS := test_config test_config_sub test_state_agg test_backlight test_settings test_wireless_codec
 
 .PHONY: all test clean
 all: test
@@ -38,6 +38,12 @@ test_backlight: test_backlight.c ../src/backlight_codec.c
 # settings_codec.c (フラッシュ/HID非依存の純粋関数) + config.c(get_controller_idフォールバック
 # 先)を対象にする。settings.c(フラッシュ消去/書込)はhardware/flash依存のためホストテスト対象外。
 test_settings: test_settings.c ../src/settings_codec.c ../src/config.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# wireless_codec.c (CYW43/lwIP非依存の純粋関数) のみを対象にする。state_agg_pack/
+# backlight_parse_output_reportへ委譲する箇所を検証するため、その実装(state_agg.c/
+# backlight_codec.c)もリンクする。wireless.c(CYW43/lwIP依存のI/O部)はホストテスト対象外。
+test_wireless_codec: test_wireless_codec.c ../src/wireless_codec.c ../src/state_agg.c ../src/backlight_codec.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

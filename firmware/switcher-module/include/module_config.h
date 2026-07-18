@@ -10,6 +10,15 @@
 #define MAX_MODULES 8
 #define I2C_BASE_ADDR 0x30
 
+// ---- I2Cスレーブ レジスタマップ (親仕様書 §4.5。pico2w-controller/include/config.h の
+// MODULE_REG_* と値・命名を揃える) ----
+#define MODULE_REG_STATE 0x00
+#define MODULE_REG_STATE_LEN 3 // [0]SW状態(下位4bit) / [1]VR_SRC1(0..255) / [2]VR_SRC2(0..255)
+#define MODULE_REG_BACKLIGHT 0x10
+#define MODULE_REG_BACKLIGHT_LEN (BACKLIGHT_LED_COUNT * 3) // 4灯分RGB(write)
+#define MODULE_REG_INFO 0xF0
+#define MODULE_REG_INFO_LEN 4 // [0..1]fw version / [2]capabilities / [3]HW rev
+
 // ---- SWマトリクス (PGM1×SRC1, PGM1×SRC2, PGM2×SRC1, PGM2×SRC2 の計4SW) ----
 #define SW_ROW_COUNT 2 // PGM1, PGM2
 #define SW_COL_COUNT 2 // SRC1, SRC2

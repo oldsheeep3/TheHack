@@ -16,6 +16,7 @@
     <ProjectReference Include="..\Switcher.Web\Switcher.Web.csproj" />
     <ProjectReference Include="..\Switcher.Atem\Switcher.Atem.csproj" />
     <ProjectReference Include="..\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
+    <ProjectReference Include="..\Switcher.Hid\Switcher.Hid.csproj" />
   </ItemGroup>
 
   <ItemGroup>

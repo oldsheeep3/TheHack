@@ -35,17 +35,21 @@ firmware/pico2w-controller/
 │   ├── settings_codec.c      # シリアライズ/デシリアライズ/CRC検証/controller_idフォールバック (Pico SDK非依存, ホストテスト対象)
 │   ├── settings.c            # フラッシュ読み書き + HIDフィーチャーレポート結線 (hardware/flash依存)
 │   ├── usb_hid.h             # HID状態送出・controller_id設定の公開API
-│   └── usb_hid.c             # ベンダー定義HIDデバイス(記述子一式 + 入出力/featureレポート, TinyUSB依存)
+│   ├── usb_hid.c             # ベンダー定義HIDデバイス(記述子一式 + 入出力/featureレポート, TinyUSB依存)
+│   ├── wireless.h            # ワイヤレス制御チャネルのフレーム定義 + 純粋部/I/O部の公開API
+│   ├── wireless_codec.c      # STATE/BACKLIGHTフレームのエンコード/デコード (Pico SDK非依存, ホストテスト対象)
+│   └── wireless.c            # CYW43接続(バックオフ再接続)+ UDP送受信 (CYW43/lwIP依存, ENABLE_WIRELESSビルドのみ)
 └── test/                    # ホスト(native)ビルド用ユニットテスト (Pico SDK/クロスツールチェーン非依存)
     ├── Makefile
     ├── test_config.c
     ├── test_config_sub.c
-    ├── test_state_agg.c     # 入力レポートパッキング(module_present/SW/VR位置/seq)・VRデッドバンド判定
-    ├── test_backlight.c     # 出力レポート0x02のパース(RGBバイト順・範囲外module_index棄却)
-    └── test_settings.c      # 設定シリアライズ往復・破損検出・controller_idフォールバック
+    ├── test_state_agg.c       # 入力レポートパッキング(module_present/SW/VR位置/seq)・VRデッドバンド判定
+    ├── test_backlight.c       # 出力レポート0x02のパース(RGBバイト順・範囲外module_index棄却)
+    ├── test_settings.c        # 設定シリアライズ往復・破損検出・controller_idフォールバック
+    └── test_wireless_codec.c  # STATE/BACKLIGHTフレームのエンコード/デコード(state_agg/backlight_codecへの委譲含む)
 ```
 
-`state_agg_*`/`i2c_modules_*`/`usb_hid_*`/`backlight_*`/`settings_*` はすべて実装済み。
+`state_agg_*`/`i2c_modules_*`/`usb_hid_*`/`backlight_*`/`settings_*`/`wireless_*` はすべて実装済み。
 
 ## I2C / USB-HID 契約の概要
 
@@ -102,6 +106,65 @@ firmware/pico2w-controller/
 - **セキュリティ**: Wi-Fi/BT資格情報はフラッシュ保存のみとし、ログ/シリアル(UART stdio)へ
   平文出力しない。コード/コミット履歴にも資格情報を含めない。
 
+### ワイヤレス制御チャネル (任意, §2.5)
+
+USB-HIDが使えない/無線運用時の**代替経路**として、Wi-Fi(CYW43)経由でSW/VR状態送信・
+バックライト受領をUSB-HIDと同等のセマンティクスで提供する。**USB直結が主経路**であり、
+本チャネルはあくまで代替(併用可、二重送出可)。**ネットワーク未設定時は完全に無効**で、
+USB-HIDのみで従来どおり動作する(`wireless_init`が`settings.wifi_ssid`の空チェックで判定)。
+
+- **ビルド切替**: デフォルトでは無効(`ENABLE_WIRELESS` OFF)。無効ビルドでは
+  `src/wireless.c`自体がビルド対象に含まれず、CYW43/lwIPの依存・リンクサイズは一切
+  増えない(`CMakeLists.txt`)。純粋部(`wireless_codec.c`)のみ常時ビルドされる。
+- **フレーム形式**: 1メッセージ = 1 UDPデータグラム = `[type(1)]` + `[payload]`。
+  `type`にはHIDレポートIDをそのまま流用し(`WIRELESS_MSG_TYPE_STATE`=`0x01`,
+  `WIRELESS_MSG_TYPE_BACKLIGHT`=`0x02`)、`payload`はHID入力/出力レポートと**同一の
+  パッキング**を使う。ポートは`WIRELESS_UDP_PORT`(`9200`)。
+- **送信** (`wireless_send_state`): 集約状態(`state_agg`, P2-001)を`state_agg_pack`と
+  同一パッキングでSTATEフレームへエンコードし送出する。エンコード自体は
+  `wireless_codec_build_state_frame`(`wireless_codec.c`)が`state_agg_pack`を呼ぶだけで、
+  HID経路と二重実装しない。送信先(PC側)は直近にBACKLIGHTフレームを送ってきた相手を
+  記憶して使うため、PCから一度もパケットを受け取っていない場合は送出しない。未接続/
+  未確定時はUSB経路同様ドロップする(バッファリング・ブロックしない)。
+- **受領** (UDP受信コールバック): BACKLIGHTフレームは`wireless_codec_parse_backlight_frame`
+  (type一致・長さ一致を検証後、パース自体は`backlight_parse_output_report`
+  (`backlight_codec.c`)へ委譲)で検証し、成功分は`backlight_enqueue_command`
+  (`backlight.c`)でUSB出力レポート0x02と**同一の受領キュー**へ積む。以降は
+  `backlight_task()`が1回1件ずつI2C `0x10`へ配布する経路を共用するため、分配ロジックを
+  二重実装しない。
+- **接続・再接続**: `wireless_init`はネットワーク設定済みの場合のみCYW43を初期化し
+  STAモードでUDPソケットを確立する。`wireless_task`(メインループから継続呼び出し)は
+  非ブロッキングでリンク状態を確認し、未接続なら指数バックオフ(初期1秒、上限30秒)で
+  `cyw43_arch_wifi_connect_async`による再接続を試みる。初期化失敗・切断・タイムアウトは
+  すべてこのファイル内で吸収し、USB経路・I2C集約ポーリングへは一切波及しない(障害隔離)。
+- **セキュリティ**: Wi-Fi資格情報はPCから投入されフラッシュ保存(`settings`, P2-002)
+  経由のみで扱い、コード/コミット履歴には一切含めない。
+
+有効化ビルド手順:
+
+```sh
+export PICO_SDK_PATH=/path/to/pico-sdk
+cmake -B build -DPICO_BOARD=pico2_w -DENABLE_WIRELESS=ON
+cmake --build build
+```
+
+資格情報はPCから投入する前提(親仕様書 §4.6): HIDフィーチャーレポート
+(`HID_REPORT_ID_SETTINGS_FEATURE`)で`wifi_ssid`/`wifi_password`を含む設定を投入・保存後、
+Picoを再起動すると`wireless_init`がフラッシュから読み出した資格情報でWi-Fi接続を試みる。
+`wifi_ssid`が空のままなら無線は初期化されず、従来どおりUSB-HIDのみで動作する。
+
+代替チャネルの手動確認手順(実機・SDK環境が無いため未検証):
+
+1. 上記手順でWi-Fi資格情報を投入・保存し、Picoを再起動する。
+2. PC側から`WIRELESS_UDP_PORT`(`9200`)宛にBACKLIGHTフレーム
+   (`[0x02][module_index][RGB×4灯]`)を一度送り、Pico側に送信先を認識させる
+   (`wireless_send_state`は直近の受信元にのみ送出するため)。
+3. 対象モジュールの4灯が指定色で点灯すること(USB経路のバックライト配布と同様)を確認する。
+4. 以降、PCが同ポートでSTATEフレーム(`[0x01][module_present×...]`)を受信できること、
+   USB-HID入力レポート0x01と同一のバイト配置であることを確認する。
+5. Wi-Fi接続を切断し、指数バックオフで再接続が試みられること、その間もUSB-HID経路の
+   SW/VR状態送出が滞留しないことを確認する(障害隔離)。
+
 ## クロスビルド (Pico SDK 必要)
 
 このリポジトリのサンドボックス環境には Pico SDK / `arm-none-eabi` ツールチェーン / `cmake` が
@@ -119,6 +182,10 @@ cmake --build build
 ```sh
 cmake -B build -DPICO_BOARD=pico2_w -DCMAKE_C_FLAGS="-DCONTROLLER_ROLE=CONTROLLER_ROLE_SUB"
 ```
+
+ワイヤレス制御チャネル(任意, §2.5)を有効化する場合は `-DENABLE_WIRELESS=ON` を追加する
+(「ワイヤレス制御チャネル」の節参照)。指定しない場合はデフォルトでOFFとなり、
+CYW43/lwIPはリンクされない。
 
 ## 実機での手動確認手順
 
@@ -152,8 +219,10 @@ cmake -B build -DPICO_BOARD=pico2_w -DCMAKE_C_FLAGS="-DCONTROLLER_ROLE=CONTROLLE
 ## ホストテスト (Pico SDK 不要, このリポジトリで検証済み)
 
 I/O に依存しないロジック(`config.h` の定数、`get_controller_id()`、入力レポートパッキング/
-VRデッドバンド判定、出力レポート`0x02`パース、設定シリアライズ/破損検出)はホストの `gcc` で
-ネイティブビルド・実行してテストする。
+VRデッドバンド判定、出力レポート`0x02`パース、設定シリアライズ/破損検出、ワイヤレス
+STATE/BACKLIGHTフレームのエンコード/デコード)はホストの `gcc` でネイティブビルド・実行して
+テストする。CYW43/lwIP依存のI/O部(`wireless.c`)はこのホストテスト対象外(実機/SDK環境が
+必要, 「ワイヤレス制御チャネル」節の手動確認手順を参照)。
 
 ```sh
 cd firmware/pico2w-controller/test

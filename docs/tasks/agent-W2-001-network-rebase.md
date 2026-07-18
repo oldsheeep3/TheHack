@@ -1,6 +1,6 @@
 ---
 name: agent-W2-001-network-rebase
-status: doing
+status: done
 pid: 349647
 agent_cli: sonnet
 ---

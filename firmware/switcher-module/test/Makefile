@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_module_config test_module_index test_switches test_adc_scale test_sk6812_frame
+TESTS := test_module_config test_module_index test_switches test_adc_scale test_sk6812_frame test_i2c_regs
 
 .PHONY: all test clean
 all: test
@@ -36,6 +36,10 @@ test_adc_scale: test_adc_scale.c ../src/adc_scale.c
 
 # backlight.c (GPIOビットバン依存のSK6812駆動) は含めず、純粋部の sk6812_frame.c のみを対象にする。
 test_sk6812_frame: test_sk6812_frame.c ../src/sk6812_frame.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# i2c_slave.c (I2C1ペリフェラル/ISR依存) は含めず、純粋部の i2c_regs.c のみを対象にする。
+test_i2c_regs: test_i2c_regs.c ../src/i2c_regs.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

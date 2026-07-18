@@ -1,6 +1,6 @@
 ---
 name: agent-M-003-analog-backlight
-status: doing
+status: done
 pid: 374718
 agent_cli: sonnet
 ---

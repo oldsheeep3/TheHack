@@ -1,6 +1,6 @@
 ---
 name: agent-M-002-switch-input
-status: doing
+status: done
 pid: 363450
 agent_cli: sonnet
 ---

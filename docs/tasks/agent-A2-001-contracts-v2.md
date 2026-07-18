@@ -1,6 +1,6 @@
 ---
 name: agent-A2-001-contracts-v2
-status: doing
+status: done
 pid: 349325
 agent_cli: sonnet
 ---

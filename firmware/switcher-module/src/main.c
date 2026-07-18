@@ -2,9 +2,12 @@
 
 #include "module_hooks.h"
 
-// 初期化 + メインループ骨格。SW/ADC/バックライト/I2Cスレーブの実処理は各後続タスクが
-// module_hooks.h のフック関数を strong 定義することで結線される (このタスクでは
-// weak no-op が呼ばれる)。SRAM 2KB制約のため静的バッファは持たない。
+// 初期化 + メインループ。SW/ADC/バックライト/I2Cスレーブの実処理は module_hooks.h の
+// フック関数として各サブシステム(switches.c/adc.c/backlight.c/i2c_slave.c)が
+// strong 定義することで結線される。ループ順は「走査→デバウンス(switches_task) /
+// ADC→スケール(adc_task) → I2C STATE更新・BACKLIGHT受領反映(i2c_slave_task) →
+// SK6812駆動(backlight_task)」(親仕様書§2.4/§4.5)。i2c_slave_taskをbacklight_taskの
+// 直前に置くことで、同一ループ内で受領したBACKLIGHTを最短で駆動に反映する。
 int main(void) {
     SystemInit();
     funGpioInitAll();
@@ -17,7 +20,7 @@ int main(void) {
     while (1) {
         switches_task();
         adc_task();
-        backlight_task();
         i2c_slave_task();
+        backlight_task();
     }
 }

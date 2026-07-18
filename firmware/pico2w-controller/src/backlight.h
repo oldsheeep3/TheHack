@@ -30,6 +30,12 @@ void backlight_init(void);
 // ブロックしない(親仕様書 §2.3)。
 void backlight_on_output_report(const uint8_t *report, uint16_t len);
 
+// 既にパース済みのバックライトコマンドをキューへ積む。backlight_on_output_reportと同じ
+// キュー(溢れ時は最古を破棄)を共有するため、USB出力レポート0x02経由以外の受領元
+// (無線チャネル, wireless.c)もこれを使えば分配ロジック(キュー+backlight_task)を
+// 二重実装せずに済む(.claude/review-patterns.md「設計・責務分離」)。
+void backlight_enqueue_command(const backlight_command_t *cmd);
+
 // キューから最大1件を取り出し、対応モジュールのI2C `0x10 BACKLIGHT` へ書き込む。
 // メインループから継続的に呼び出すこと。1回の呼び出しで消費するのは最大1件のため、
 // STATEポーリングのレイテンシを大きく阻害しない。不通/タイムアウト時はそのコマンドを

@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.18" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Switcher.Contracts\Switcher.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Media\Switcher.Media.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Web\Switcher.Web.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Atem\Switcher.Atem.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Hid\Switcher.Hid.csproj" />
+  </ItemGroup>
+
+  <!--
+    Switcher.App.csproj is a WinExe/UseWPF project: any ProjectReference to it forces a
+    Microsoft.WindowsDesktop.App FrameworkReference onto every consumer's runtimeconfig.json, which
+    fails to launch entirely on a non-Windows test host ("Test Run Aborted" - no such shared framework
+    exists for linux-x64). AppOrchestrator and its Configuration/* dependencies have no WPF/WinForms
+    dependency of their own, so they are compiled directly from Switcher.App's sources instead of via
+    ProjectReference, keeping this test assembly WPF-free while still testing the real, unmodified
+    integration code (docs/tasks/agent-A2-006-app-integration-v2.md step 8/9: MainWindow/ProjectorWindow/
+    ViewModels/ServiceCollectionExtensions do reference WPF types and are intentionally not covered here).
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Switcher.App\Orchestration\AppOrchestrator.cs" Link="AppSources\AppOrchestrator.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\AppConfig.cs" Link="AppSources\AppConfig.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfig.cs" Link="AppSources\RuntimeConfig.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigStore.cs" Link="AppSources\RuntimeConfigStore.cs" />
+  </ItemGroup>
+
+</Project>

@@ -22,6 +22,11 @@ public sealed class SourceTileViewModel : INotifyPropertyChanged
 
     public int Channel => _info.Channel;
 
+    /// <summary>The v2 OBS-style source id (docs/specs/00-system-overview.md §4.2), or <c>null</c> for
+    /// a legacy int-channel source added via <c>POST /api/v1/config</c>. Only id-based sources can be
+    /// removed/assigned to a multiview cell/module mapping.</summary>
+    public string? Id => _info.Id;
+
     public string Name => _info.Name;
 
     public string Protocol => _info.Protocol.ToString();

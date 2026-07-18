@@ -1,6 +1,6 @@
 ---
 name: agent-A2-003-web-api-v2
-status: doing
+status: done
 pid: 369845
 agent_cli: sonnet
 ---

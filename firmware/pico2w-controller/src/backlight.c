@@ -25,14 +25,17 @@ void backlight_on_output_report(const uint8_t *report, uint16_t len) {
     if (!backlight_parse_output_report(report, len, &cmd)) {
         return; // 不正なレポートは棄却
     }
+    backlight_enqueue_command(&cmd);
+}
 
+void backlight_enqueue_command(const backlight_command_t *cmd) {
     if (queue_count >= BACKLIGHT_QUEUE_SIZE) {
         // キュー溢れ: 最古のコマンドを破棄して直近のバックライト指定を優先する
         // (buttons.cのイベントキューと同方針)。
         queue_head = (uint8_t)((queue_head + 1) % BACKLIGHT_QUEUE_SIZE);
         queue_count--;
     }
-    queue[queue_tail] = cmd;
+    queue[queue_tail] = *cmd;
     queue_tail = (uint8_t)((queue_tail + 1) % BACKLIGHT_QUEUE_SIZE);
     queue_count++;
 }

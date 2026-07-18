@@ -1,10 +1,11 @@
 <Window x:Class="Switcher.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Switcher.App" Height="720" Width="1280"
+        Title="Switcher.App" Height="800" Width="1440"
         Background="#FF1A1A1E"
         Foreground="White">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="White" />
         </Style>
@@ -15,6 +16,12 @@
             <Setter Property="Margin" Value="4" />
             <Setter Property="Padding" Value="6" />
         </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Margin" Value="0,2" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Margin" Value="0,2" />
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -22,64 +29,134 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Status bar: tally + ATEM connection state -->
+        <!-- Status bar: 2-bus tally + ATEM connection state -->
         <Border Grid.Row="0" Background="#FF101014" Padding="8">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Text="PGM:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
-                <TextBlock x:Name="ActivePgmText" Text="-" Margin="0,0,16,0" />
-                <TextBlock Text="PVW:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FF55FF55" />
-                <TextBlock x:Name="ActivePvwText" Text="-" Margin="0,0,16,0" />
+                <TextBlock Text="PGM1:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
+                <TextBlock x:Name="ActivePgm1Text" Text="-" Margin="0,0,12,0" />
+                <TextBlock Text="PGM2:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
+                <TextBlock x:Name="ActivePgm2Text" Text="-" Margin="0,0,12,0" />
+                <TextBlock Text="PVW1:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FF55FF55" />
+                <TextBlock x:Name="ActivePvw1Text" Text="-" Margin="0,0,12,0" />
+                <TextBlock Text="PVW2:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FF55FF55" />
+                <TextBlock x:Name="ActivePvw2Text" Text="-" Margin="0,0,16,0" />
                 <TextBlock Text="ATEM:" Margin="0,0,4,0" FontWeight="Bold" />
                 <TextBlock x:Name="AtemStateText" Text="Disconnected" Margin="0,0,16,0" />
                 <Button x:Name="OpenProjectorButton" Content="Open Projector" Padding="8,2" Click="OnOpenProjectorClick" />
             </StackPanel>
         </Border>
 
-        <!-- Multiview: source tiles + PGM/PVW previews -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="320" />
             </Grid.ColumnDefinitions>
 
-            <ScrollViewer Grid.Column="0">
-                <ItemsControl x:Name="SourceTilesControl">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource TileBorder}">
-                                <StackPanel>
-                                    <TextBlock Text="{Binding Channel, StringFormat='Ch {0}'}" FontWeight="Bold" />
-                                    <TextBlock Text="{Binding Name}" />
-                                    <TextBlock Text="{Binding Protocol}" Opacity="0.7" />
-                                    <TextBlock Text="{Binding Resolution}" Opacity="0.7" />
-                                    <Ellipse Width="10" Height="10" Fill="{Binding StatusBrush}" HorizontalAlignment="Left" Margin="0,4,0,0" />
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+            <!-- Source dock: add-source form + tile list (§2.1 OBS-style free add/remove) -->
+            <DockPanel Grid.Column="0">
+                <Border DockPanel.Dock="Top" Style="{StaticResource TileBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Add Source" FontWeight="Bold" />
+                        <TextBox x:Name="NewSourceIdBox" ToolTip="id" />
+                        <TextBox x:Name="NewSourceNameBox" ToolTip="name" />
+                        <ComboBox x:Name="NewSourceTypeCombo" SelectedIndex="0">
+                            <ComboBoxItem Content="NDI" />
+                            <ComboBoxItem Content="WEBCAM" />
+                            <ComboBoxItem Content="SRT" />
+                        </ComboBox>
+                        <TextBox x:Name="NewSourceConfigBox" ToolTip="NDI source name / webcam device id / SRT url" />
+                        <Button Content="Add" Click="OnAddSourceClick" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer>
+                    <ItemsControl x:Name="SourceTilesControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource TileBorder}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Channel, StringFormat='Ch {0}'}" FontWeight="Bold" />
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Text="{Binding Protocol}" Opacity="0.7" />
+                                        <TextBlock Text="{Binding Resolution}" Opacity="0.7" />
+                                        <Ellipse Width="10" Height="10" Fill="{Binding StatusBrush}" HorizontalAlignment="Left" Margin="0,4,0,0" />
+                                        <Button Content="Remove" Click="OnRemoveSourceClick" Tag="{Binding Id}" Margin="0,4,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+
+            <!-- 4x4 configurable multiview (§2.2/§5): each cell freely assigned to PGM1/PGM2/PVW1/PVW2/SRC:<id>/EMPTY -->
+            <ItemsControl Grid.Column="1" x:Name="MultiviewControl">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Rows="4" Columns="4" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource TileBorder}" BorderBrush="{Binding BorderBrush}" BorderThickness="2">
+                            <DockPanel>
+                                <ComboBox DockPanel.Dock="Top"
+                                          ItemsSource="{Binding AvailableTokens}"
+                                          SelectedItem="{Binding Token, Mode=TwoWay}"
+                                          SelectionChanged="OnMultiviewCellSelectionChanged" />
+                                <Image Source="{Binding Image}" Stretch="Uniform" />
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Output routing + module mapping panels -->
+            <ScrollViewer Grid.Column="2">
+                <StackPanel Margin="4">
+                    <TextBlock Text="Outputs" FontWeight="Bold" Margin="0,0,0,4" />
+                    <ItemsControl x:Name="OutputsControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource TileBorder}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Sink}" FontWeight="Bold" />
+                                        <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}" />
+                                        <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="Display Id" Opacity="0.7" />
+                                            <TextBox Text="{Binding DisplayId, Mode=TwoWay}" />
+                                            <CheckBox Content="Hide Cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,4,0,0" />
+                                            <CheckBox Content="Fullscreen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="Apply Outputs" Click="OnApplyOutputsClick" Margin="0,4,0,12" />
+
+                    <TextBlock Text="Modules" FontWeight="Bold" Margin="0,0,0,4" />
+                    <ItemsControl x:Name="ModulesControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource TileBorder}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Index, StringFormat='Module {0}'}" FontWeight="Bold" />
+                                        <TextBlock Text="Src1" Opacity="0.7" />
+                                        <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src1SourceId, Mode=TwoWay}" />
+                                        <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src1VrTarget, Mode=TwoWay}" />
+                                        <TextBlock Text="Src2" Opacity="0.7" Margin="0,4,0,0" />
+                                        <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src2SourceId, Mode=TwoWay}" />
+                                        <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src2VrTarget, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="Apply Modules" Click="OnApplyModulesClick" Margin="0,4,0,0" />
+                </StackPanel>
             </ScrollViewer>
-
-            <Grid Grid.Column="1">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <Border Grid.Row="0" Style="{StaticResource TileBorder}">
-                    <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="PROGRAM" FontWeight="Bold" Foreground="#FFFF5555" />
-                        <Image x:Name="ProgramImage" Stretch="Uniform" />
-                    </DockPanel>
-                </Border>
-
-                <Border Grid.Row="1" Style="{StaticResource TileBorder}">
-                    <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontWeight="Bold" Foreground="#FF55FF55" />
-                        <Image x:Name="PreviewImage" Stretch="Uniform" />
-                    </DockPanel>
-                </Border>
-            </Grid>
         </Grid>
     </Grid>
 </Window>

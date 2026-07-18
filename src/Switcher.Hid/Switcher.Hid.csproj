@@ -11,4 +11,9 @@
     <ProjectReference Include="..\Switcher.Contracts\Switcher.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Cross-platform HID I/O for the real device adapter (Devices/HidSharpDevice.cs). -->
+    <PackageReference Include="HidSharp" Version="2.6.4" />
+  </ItemGroup>
+
 </Project>
