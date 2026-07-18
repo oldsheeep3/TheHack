@@ -1,4 +1,6 @@
+using Switcher.Contracts;
 using Switcher.VirtualCam.Devices;
+using Switcher.VirtualCam.Display;
 
 namespace Switcher.VirtualCam.Tests;
 
@@ -14,11 +16,129 @@ internal sealed class FakeVirtualCameraDevice : IVirtualCameraDevice
 
     public int DisposeCount { get; private set; }
 
-    public void Open(int width, int height) => OpenCalls.Add((width, height));
+    public bool ThrowOnOpen { get; set; }
+
+    public void Open(int width, int height)
+    {
+        if (ThrowOnOpen)
+        {
+            throw new InvalidOperationException("Simulated device failure.");
+        }
+
+        OpenCalls.Add((width, height));
+    }
 
     public void PushFrame(ReadOnlySpan<byte> nv12Frame) => PushFrameCalls.Add(nv12Frame.ToArray());
 
     public void Close() => CloseCount++;
 
     public void Dispose() => DisposeCount++;
+}
+
+/// <summary>Controllable stand-in for <see cref="IDualVirtualCameraOutput"/>: records every call so
+/// <see cref="OutputRouterTests"/> can assert on frame fan-out without a real device.</summary>
+internal sealed class FakeDualVirtualCameraOutput : IDualVirtualCameraOutput
+{
+    public List<(OutputSink Sink, FrameData Frame)> SubmitFrameCalls { get; } = [];
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public OutputSink? ThrowOnSubmitToSink { get; set; }
+
+    public void Start() => StartCount++;
+
+    public void SubmitFrame(OutputSink sink, FrameData frame)
+    {
+        if (sink == ThrowOnSubmitToSink)
+        {
+            throw new InvalidOperationException($"Simulated failure submitting to {sink}.");
+        }
+
+        SubmitFrameCalls.Add((sink, frame));
+    }
+
+    public void Stop() => StopCount++;
+}
+
+/// <summary>Controllable stand-in for <see cref="ISwapChainOutput"/>: records every call so
+/// <see cref="HdmiFullscreenOutputTests"/> can assert on attach/present/detach without a real DXGI swap
+/// chain.</summary>
+internal sealed class FakeSwapChainOutput : ISwapChainOutput
+{
+    public List<(int DisplayIndex, nint WindowHandle)> AttachCalls { get; } = [];
+
+    public List<FrameData> PresentCalls { get; } = [];
+
+    public int DetachCount { get; private set; }
+
+    public int DisposeCount { get; private set; }
+
+    public void AttachToDisplay(int displayIndex, nint windowHandle) => AttachCalls.Add((displayIndex, windowHandle));
+
+    public void Present(FrameData frame) => PresentCalls.Add(frame);
+
+    public void Detach() => DetachCount++;
+
+    public void Dispose() => DisposeCount++;
+}
+
+/// <summary>Controllable stand-in for <see cref="ICursorVisibility"/>: records every call so
+/// <see cref="HdmiFullscreenOutputTests"/> can assert on the <c>hide_cursor</c> policy without the
+/// Windows-only <c>user32.dll</c> call.</summary>
+internal sealed class FakeCursorVisibility : ICursorVisibility
+{
+    public int HideCount { get; private set; }
+
+    public int ShowCount { get; private set; }
+
+    public void Hide() => HideCount++;
+
+    public void Show() => ShowCount++;
+}
+
+/// <summary>Controllable stand-in for <see cref="IHdmiFullscreenOutput"/>: records every call so
+/// <see cref="OutputRouterTests"/> can assert on frame fan-out without a real swap chain.</summary>
+internal sealed class FakeHdmiFullscreenOutput : IHdmiFullscreenOutput
+{
+    public List<FrameData> PresentCalls { get; } = [];
+
+    public bool ThrowOnPresent { get; set; }
+
+    public int? DisplayId { get; private set; }
+
+    public bool HideCursor { get; private set; }
+
+    public bool Fullscreen { get; private set; }
+
+    public bool IsAttached { get; private set; }
+
+    public void Attach(int displayId, nint windowHandle, bool hideCursor, bool fullscreen)
+    {
+        DisplayId = displayId;
+        HideCursor = hideCursor;
+        Fullscreen = fullscreen;
+        IsAttached = true;
+    }
+
+    public void Present(FrameData frame)
+    {
+        if (ThrowOnPresent)
+        {
+            throw new InvalidOperationException("Simulated HDMI present failure.");
+        }
+
+        PresentCalls.Add(frame);
+    }
+
+    public void Detach()
+    {
+        IsAttached = false;
+        DisplayId = null;
+    }
+
+    public void Dispose()
+    {
+    }
 }

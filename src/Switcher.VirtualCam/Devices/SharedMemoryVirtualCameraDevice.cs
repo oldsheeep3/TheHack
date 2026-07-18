@@ -11,14 +11,22 @@ namespace Switcher.VirtualCam.Devices;
 /// links everywhere, matching <c>Switcher.Media.Compositing.DirectX11Compositor</c>'s approach to
 /// Windows-only native dependencies).
 /// </summary>
+/// <remarks>
+/// The shared-memory/event names are parameterized (rather than fixed constants) so that two
+/// instances (VCAM1/VCAM2) can coexist as distinct devices without colliding on the same named
+/// region; see <see cref="DefaultMemoryMappedFileName"/>/<see cref="DefaultFrameReadyEventName"/> for
+/// the single-camera default that matches the native filter's original registration.
+/// </remarks>
 internal sealed class SharedMemoryVirtualCameraDevice : IVirtualCameraDevice
 {
-    private const string MemoryMappedFileName = "Local\\HybridSwitcherVCamFrame";
-    private const string FrameReadyEventName = "Local\\HybridSwitcherVCamFrameReady";
+    internal const string DefaultMemoryMappedFileName = "Local\\HybridSwitcherVCamFrame";
+    internal const string DefaultFrameReadyEventName = "Local\\HybridSwitcherVCamFrameReady";
 
     // Header layout written before the NV12 payload: width (int32) + height (int32).
     private const int HeaderSizeBytes = 8;
 
+    private readonly string _memoryMappedFileName;
+    private readonly string _frameReadyEventName;
     private readonly object _lock = new();
 
     private MemoryMappedFile? _memoryMappedFile;
@@ -27,6 +35,20 @@ internal sealed class SharedMemoryVirtualCameraDevice : IVirtualCameraDevice
     private int _width;
     private int _height;
     private bool _disposed;
+
+    public SharedMemoryVirtualCameraDevice()
+        : this(DefaultMemoryMappedFileName, DefaultFrameReadyEventName)
+    {
+    }
+
+    public SharedMemoryVirtualCameraDevice(string memoryMappedFileName, string frameReadyEventName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(memoryMappedFileName);
+        ArgumentException.ThrowIfNullOrEmpty(frameReadyEventName);
+
+        _memoryMappedFileName = memoryMappedFileName;
+        _frameReadyEventName = frameReadyEventName;
+    }
 
     public void Open(int width, int height)
     {
@@ -51,9 +73,9 @@ internal sealed class SharedMemoryVirtualCameraDevice : IVirtualCameraDevice
             }
 
             var bufferSize = HeaderSizeBytes + Nv12FrameConverter.GetRequiredBufferSize(width, height);
-            _memoryMappedFile = MemoryMappedFile.CreateOrOpen(MemoryMappedFileName, bufferSize);
+            _memoryMappedFile = MemoryMappedFile.CreateOrOpen(_memoryMappedFileName, bufferSize);
             _viewAccessor = _memoryMappedFile.CreateViewAccessor();
-            _frameReadyEvent = new EventWaitHandle(false, EventResetMode.AutoReset, FrameReadyEventName);
+            _frameReadyEvent = new EventWaitHandle(false, EventResetMode.AutoReset, _frameReadyEventName);
             _width = width;
             _height = height;
         }
