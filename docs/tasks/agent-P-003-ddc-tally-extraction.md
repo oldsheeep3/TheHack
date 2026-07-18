@@ -1,6 +1,6 @@
 ---
 name: agent-P-003-ddc-tally-extraction
-status: doing
+status: reviewing
 pid: 310048
 agent_cli: sonnet
 ---
