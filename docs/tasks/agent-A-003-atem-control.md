@@ -1,6 +1,6 @@
 ---
 name: agent-A-003-atem-control
-status: reviewing
+status: done
 pid: 196024
 agent_cli: sonnet
 ---

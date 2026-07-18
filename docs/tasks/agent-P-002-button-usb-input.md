@@ -1,6 +1,6 @@
 ---
 name: agent-P-002-button-usb-input
-status: reviewing
+status: done
 pid: 303216
 agent_cli: sonnet
 ---

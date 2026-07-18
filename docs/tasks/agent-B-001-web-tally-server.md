@@ -1,6 +1,6 @@
 ---
 name: agent-B-001-web-tally-server
-status: reviewing
+status: done
 pid: 165471
 agent_cli: sonnet
 ---

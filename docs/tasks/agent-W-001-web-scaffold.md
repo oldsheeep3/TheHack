@@ -1,7 +1,7 @@
 ---
 name: agent-W-001-web-scaffold
-status: planning
-pid:
+status: done
+pid: 154963
 agent_cli: sonnet
 ---
 

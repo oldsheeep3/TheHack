@@ -1,6 +1,6 @@
 ---
 name: agent-A-004-app-integration
-status: doing
+status: done
 pid: 207459
 agent_cli: sonnet
 ---

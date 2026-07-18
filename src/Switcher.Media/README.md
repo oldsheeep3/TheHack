@@ -3,6 +3,8 @@
 Multi-source input manager (UVC / NDI / SRT) and GPU/PiP compositor engine implementing
 `IInputSourceManager` / `ICompositorEngine` from `Switcher.Contracts`.
 
+> 親プロジェクト: [`../../README.md`](../../README.md) ／ 仕様書: [`docs/specs/pc-switcher-app.md`](../../docs/specs/pc-switcher-app.md)
+
 ## Runtime prerequisites
 
 This project **builds** on any platform/CI without additional native dependencies, but

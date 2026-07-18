@@ -1,7 +1,8 @@
 # pico2w-controller ファームウェア
 
 Raspberry Pi Pico 2W (`pico2_w`, RP2350 + CYW43) 向けコントローラー / タリー抽出ファームウェア。
-仕様: [`docs/specs/pico2w-controller-firmware.md`](../../docs/specs/pico2w-controller-firmware.md)
+
+> 親プロジェクト: [`../../README.md`](../../README.md) ／ 仕様書: [`docs/specs/pico2w-controller-firmware.md`](../../docs/specs/pico2w-controller-firmware.md)
 
 ## ディレクトリ構成
 

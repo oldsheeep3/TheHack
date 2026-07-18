@@ -1,6 +1,6 @@
 ---
 name: agent-B-002-virtualcam-output
-status: doing
+status: done
 pid: 196104
 agent_cli: sonnet
 ---

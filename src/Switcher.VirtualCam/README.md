@@ -3,6 +3,8 @@
 Virtual camera output and full-screen physical display output implementing
 `IVirtualCameraOutput` (`Switcher.Contracts`) and the `ISwapChainOutput` defined in this project.
 
+> 親プロジェクト: [`../../README.md`](../../README.md) ／ 仕様書: [`docs/specs/pc-switcher-app.md`](../../docs/specs/pc-switcher-app.md)
+
 ## Virtual camera device
 
 `VirtualCameraOutput` converts each composited `FrameData` (BGRA32, matching

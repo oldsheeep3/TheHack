@@ -1,37 +1,35 @@
-# React + TypeScript + Vite
+# phone-bridge — スマホ経由Webブリッジ & 設定WebUI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+スマホのブラウザからアクセスし、以下2機能を1つのモダンなWebUIで提供する（React / TypeScript）。
 
-Currently, two official plugins are available:
+1. **中継モード（USB→Network ブリッジ）**: USB-OTG接続された Pico 2W コントローラーの入力を
+   Web Serial API で読み取り、メインPC常駐アプリへ WebSocket 経由で即時転送する。
+2. **設定モード（スイッチャー設定UI）**: メインPCの WebAPI（`/api/v1/*`, ポート8080）を通じて
+   入力ソース一覧の表示・PiPレイアウト編集・シーンプリセットの保存/読込を行う。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 親プロジェクト: [`../../README.md`](../../README.md)
+- 仕様書: [`docs/specs/phone-web-bridge.md`](../../docs/specs/phone-web-bridge.md)（共通プロトコルは親仕様書 §4）
 
-## React Compiler
+## 技術スタック
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React / TypeScript（Vite）
+- Tailwind CSS（ダークモード標準）
+- Web Serial API（OTG接続の Pico 2W を直接読取）
+- WebSocket（PC常駐アプリ :8080）、REST（`/api/v1/*`）
 
-## Expanding the Oxlint configuration
+## 開発
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm install
+npm run dev      # 開発サーバ（Vite）
+npm run build    # tsc -b && vite build
+npm run lint     # ESLint
+npm test         # vitest
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+> Web Serial は HTTPS または `localhost` かつ Chromium 系ブラウザ（Chrome / Edge 等）が前提。
 
-## USB→Network ブリッジ（中継モード）の手動確認手順
+## 中継モード（USB→Network ブリッジ）の手動確認手順
 
 中継モードは Web Serial 対応の Chromium 系ブラウザ（Chrome / Edge 等）かつ HTTPS または `localhost` 経由でのみ動作する。
 
@@ -46,7 +44,7 @@ See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rule
 9. PC側WebSocketサーバーを一時停止/再開し、WSステータスが「再接続中…」→「接続済み」へ自動復帰することを確認する。
 10. 「USB切断」ボタンでユーザー操作による切断ができ、USBステータスが「切断」になることを確認する。
 
-## スイッチャー設定UI（設定モード）の手動確認手順
+## 設定モード（スイッチャー設定UI）の手動確認手順
 
 設定モードはメインPC常駐アプリの WebAPI（`GET /api/v1/sources` / `POST /api/v1/config`、ポート8080）に対してポーリング／送信する。
 

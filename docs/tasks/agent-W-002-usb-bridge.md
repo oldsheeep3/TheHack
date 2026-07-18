@@ -1,6 +1,6 @@
 ---
 name: agent-W-002-usb-bridge
-status: reviewing
+status: done
 pid: 300915
 agent_cli: sonnet
 ---

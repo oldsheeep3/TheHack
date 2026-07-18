@@ -3,6 +3,8 @@
 The WPF host app (`net9.0-windows`) that wires every module together into one resident process
 (docs/tasks/agent-A-004-app-integration.md, docs/specs/pc-switcher-app.md).
 
+> 親プロジェクト: [`../../README.md`](../../README.md) ／ 仕様書: [`docs/specs/pc-switcher-app.md`](../../docs/specs/pc-switcher-app.md)
+
 ## Composition
 
 `Composition/ServiceCollectionExtensions.AddSwitcherApp` is the DI composition root. It registers:
