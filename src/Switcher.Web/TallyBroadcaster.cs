@@ -26,7 +26,7 @@ public sealed class TallyBroadcaster : ITallyBroadcaster, IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _redundantSendTask;
     private readonly object _stateLock = new();
-    private TallyState _lastState = new(Array.Empty<int>(), Array.Empty<int>());
+    private byte[] _lastPayload = SerializePayload(new TallyState(Array.Empty<int>(), Array.Empty<int>()));
 
     public TallyBroadcaster(ILogger<TallyBroadcaster> logger)
         : this(logger, ProtocolConstants.TallyBroadcastAddress, ProtocolConstants.TallyBroadcastPort)
@@ -44,24 +44,30 @@ public sealed class TallyBroadcaster : ITallyBroadcaster, IAsyncDisposable
         _redundantSendTask = Task.Run(() => RedundantSendLoopAsync(_cts.Token));
     }
 
-    public void Publish(TallyState state)
-    {
-        lock (_stateLock)
-        {
-            _lastState = state;
-        }
+    public void Publish(TallyState state) => PublishPayload(SerializePayload(state));
 
-        Send(state);
-    }
+    public void Publish(TallyStateV2 state) => PublishPayload(SerializePayload(state));
 
     internal static byte[] SerializePayload(TallyState state) =>
         JsonSerializer.SerializeToUtf8Bytes(state, ProtocolJsonOptions.Default);
 
-    private void Send(TallyState state)
+    internal static byte[] SerializePayload(TallyStateV2 state) =>
+        JsonSerializer.SerializeToUtf8Bytes(state, ProtocolJsonOptions.Default);
+
+    private void PublishPayload(byte[] payload)
+    {
+        lock (_stateLock)
+        {
+            _lastPayload = payload;
+        }
+
+        Send(payload);
+    }
+
+    private void Send(byte[] payload)
     {
         try
         {
-            var payload = SerializePayload(state);
             _udpClient.Send(payload, payload.Length, _broadcastEndpoint);
         }
         catch (SocketException ex)
@@ -81,13 +87,13 @@ public sealed class TallyBroadcaster : ITallyBroadcaster, IAsyncDisposable
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                TallyState state;
+                byte[] payload;
                 lock (_stateLock)
                 {
-                    state = _lastState;
+                    payload = _lastPayload;
                 }
 
-                Send(state);
+                Send(payload);
             }
         }
         catch (OperationCanceledException)

@@ -10,6 +10,11 @@ namespace Switcher.Web;
 /// event at a time is forwarded to <see cref="IControllerInputSink.Enqueue"/>, preventing races or
 /// reordering on simultaneous button presses.
 /// </summary>
+/// <remarks>
+/// Feeds only the <c>/ws</c> WebSocket path, which is superseded by the HID input path
+/// (agent-A2-004-hid-io) and retained solely for the optional wireless controller fallback
+/// (docs/specs/pc-switcher-app.md §2.6).
+/// </remarks>
 public sealed class ControllerInputQueue : IAsyncDisposable
 {
     private readonly Channel<ButtonEvent> _channel = Channel.CreateUnbounded<ButtonEvent>(

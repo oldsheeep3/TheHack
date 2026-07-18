@@ -70,6 +70,39 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    // The v2 API surface below (agent-A2-003-web-api-v2) is wired into WebHostEndpoints now, but
+    // routing it into real core state (2-bus compositor, OBS-style sources, multiview, outputs,
+    // modules, ATEM, Pico network) is the direct integration work of agent-A2-006-app-integration-v2.
+    public Task AddSourceAsync(SourceDefinition source, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task UpdateSourceAsync(string id, SourceDefinition source, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task RemoveSourceAsync(string id, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyProgramAsync(ProgramRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyMultiviewAsync(MultiviewLayout layout, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
+    public Task ApplyPicoNetworkConfigAsync(PicoNetworkConfig config, CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException("Wired by agent-A2-006-app-integration-v2.");
+
     public void Enqueue(ButtonEvent buttonEvent)
     {
         ArgumentNullException.ThrowIfNull(buttonEvent);

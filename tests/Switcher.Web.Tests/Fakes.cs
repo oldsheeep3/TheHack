@@ -5,10 +5,80 @@ namespace Switcher.Web.Tests;
 internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
 {
     public List<ConfigChangeRequest> Received { get; } = [];
+    public List<SourceDefinition> AddedSources { get; } = [];
+    public List<(string Id, SourceDefinition Source)> UpdatedSources { get; } = [];
+    public List<string> RemovedSourceIds { get; } = [];
+    public List<ProgramRequest> AppliedPrograms { get; } = [];
+    public List<MultiviewLayout> AppliedMultiviews { get; } = [];
+    public List<OutputsRequest> AppliedOutputs { get; } = [];
+    public List<ModulesRequest> AppliedModules { get; } = [];
+    public List<AtemConfig> AppliedAtemConfigs { get; } = [];
+    public List<AtemCommandRequest> SentAtemCommands { get; } = [];
+    public List<PicoNetworkConfig> AppliedPicoNetworkConfigs { get; } = [];
 
     public Task ApplyConfigAsync(ConfigChangeRequest request, CancellationToken cancellationToken = default)
     {
         Received.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task AddSourceAsync(SourceDefinition source, CancellationToken cancellationToken = default)
+    {
+        AddedSources.Add(source);
+        return Task.CompletedTask;
+    }
+
+    public Task UpdateSourceAsync(string id, SourceDefinition source, CancellationToken cancellationToken = default)
+    {
+        UpdatedSources.Add((id, source));
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveSourceAsync(string id, CancellationToken cancellationToken = default)
+    {
+        RemovedSourceIds.Add(id);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyProgramAsync(ProgramRequest request, CancellationToken cancellationToken = default)
+    {
+        AppliedPrograms.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyMultiviewAsync(MultiviewLayout layout, CancellationToken cancellationToken = default)
+    {
+        AppliedMultiviews.Add(layout);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
+    {
+        AppliedOutputs.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
+    {
+        AppliedModules.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
+    {
+        AppliedAtemConfigs.Add(config);
+        return Task.CompletedTask;
+    }
+
+    public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)
+    {
+        SentAtemCommands.Add(command);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyPicoNetworkConfigAsync(PicoNetworkConfig config, CancellationToken cancellationToken = default)
+    {
+        AppliedPicoNetworkConfigs.Add(config);
         return Task.CompletedTask;
     }
 }

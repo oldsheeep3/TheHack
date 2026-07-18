@@ -11,6 +11,11 @@ namespace Switcher.Web.Endpoints;
 /// Accepts the <c>/ws</c> controller-input WebSocket connection and feeds decoded
 /// <see cref="ButtonEvent"/>s into the shared <see cref="ControllerInputQueue"/>.
 /// </summary>
+/// <remarks>
+/// Superseded by the HID input path (agent-A2-004-hid-io); this WebSocket route is retained purely
+/// for the optional wireless controller fallback (docs/specs/pc-switcher-app.md §2.6) and is not the
+/// primary controller input path going forward.
+/// </remarks>
 internal static class ControllerWebSocketEndpoint
 {
     private const int ReceiveBufferSize = 4 * 1024;

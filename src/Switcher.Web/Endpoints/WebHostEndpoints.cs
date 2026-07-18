@@ -12,7 +12,22 @@ internal static class WebHostEndpoints
     public static void Map(IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/v1/config", ConfigEndpoint.PostAsync);
+
         endpoints.MapGet("/api/v1/sources", SourcesEndpoint.Get);
+        endpoints.MapPost("/api/v1/sources", SourcesEndpoint.PostAsync);
+        endpoints.MapPut("/api/v1/sources/{id}", SourcesEndpoint.PutAsync);
+        endpoints.MapDelete("/api/v1/sources/{id}", SourcesEndpoint.DeleteAsync);
+
+        endpoints.MapPost("/api/v1/program", ProgramEndpoint.PostAsync);
+        endpoints.MapPut("/api/v1/multiview", MultiviewEndpoint.PutAsync);
+        endpoints.MapPut("/api/v1/outputs", OutputsEndpoint.PutAsync);
+        endpoints.MapPut("/api/v1/modules", ModulesEndpoint.PutAsync);
+        endpoints.MapPut("/api/v1/atem", AtemEndpoint.PutConfigAsync);
+        endpoints.MapPost("/api/v1/atem/command", AtemEndpoint.PostCommandAsync);
+        endpoints.MapPut("/api/v1/pico/network", PicoNetworkEndpoint.PutAsync);
+
+        // Superseded by the HID input path (agent-A2-004-hid-io); retained only for the optional
+        // wireless controller fallback (docs/specs/pc-switcher-app.md §2.6).
         endpoints.Map("/ws", ControllerWebSocketEndpoint.HandleAsync);
     }
 }
