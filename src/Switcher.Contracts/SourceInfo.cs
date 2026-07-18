@@ -5,4 +5,6 @@ public sealed record SourceInfo(
     string Name,
     SourceProtocol Protocol,
     string? Resolution,
-    SourceStatus Status);
+    SourceStatus Status,
+    string? Id = null,
+    int? Order = null);
