@@ -58,7 +58,7 @@ describe('SourceInfo', () => {
       name: 'Main Camera',
       protocol: 'UVC',
       resolution: '1920x1080',
-      status: 'connected',
+      status: 'Connected',
     }
 
     expect(JSON.parse(JSON.stringify(source))).toEqual(source)
@@ -70,9 +70,9 @@ describe('SourceProtocol / SourceStatus guards', () => {
     expect(isSourceProtocol('UVC')).toBe(true)
     expect(isSourceProtocol('NDI')).toBe(true)
     expect(isSourceProtocol('SRT')).toBe(true)
-    expect(isSourceStatus('connected')).toBe(true)
-    expect(isSourceStatus('disconnected')).toBe(true)
-    expect(isSourceStatus('error')).toBe(true)
+    expect(isSourceStatus('Connected')).toBe(true)
+    expect(isSourceStatus('Disconnected')).toBe(true)
+    expect(isSourceStatus('Error')).toBe(true)
   })
 
   it('reject unknown values', () => {

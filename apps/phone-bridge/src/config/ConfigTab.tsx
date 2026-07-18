@@ -11,15 +11,15 @@ const TALLY_POLL_MS = 300
 const CONFIG_SEND_DEBOUNCE_MS = 150
 
 const STATUS_LABEL: Record<SourceStatus, string> = {
-  connected: '接続済み',
-  disconnected: '未接続',
-  error: 'エラー',
+  Connected: '接続済み',
+  Disconnected: '未接続',
+  Error: 'エラー',
 }
 
 const STATUS_COLOR: Record<SourceStatus, string> = {
-  connected: 'bg-success',
-  disconnected: 'bg-text-muted',
-  error: 'bg-danger',
+  Connected: 'bg-success',
+  Disconnected: 'bg-text-muted',
+  Error: 'bg-danger',
 }
 
 const DEFAULT_PIP: PipSettings = {
