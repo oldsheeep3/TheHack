@@ -1,7 +1,7 @@
 ---
 name: agent-W-002-usb-bridge
-status: planning
-pid:
+status: doing
+pid: 300915
 agent_cli: sonnet
 ---
 

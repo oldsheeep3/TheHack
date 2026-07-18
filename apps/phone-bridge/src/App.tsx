@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
+import { RelayTab } from './bridge/RelayTab'
 
 type Tab = 'relay' | 'config'
 
@@ -37,17 +38,9 @@ function App(): JSX.Element {
       </nav>
 
       <main className="flex-1 p-4" role="tabpanel">
-        {activeTab === 'relay' ? <RelayModePlaceholder /> : <ConfigModePlaceholder />}
+        {activeTab === 'relay' ? <RelayTab /> : <ConfigModePlaceholder />}
       </main>
     </div>
-  )
-}
-
-function RelayModePlaceholder(): JSX.Element {
-  return (
-    <p className="text-text-muted">
-      中継モード（Web Serial/WebUSB → WebSocket 中継）は後続タスクで実装されます。
-    </p>
   )
 }
 
