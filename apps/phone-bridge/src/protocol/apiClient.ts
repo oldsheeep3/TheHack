@@ -1,4 +1,4 @@
-import type { ConfigChangeRequest, SourceInfo } from './types'
+import type { ConfigChangeRequest, SourceInfo, TallyState } from './types'
 
 export const DEFAULT_API_PORT = 8080
 
@@ -41,6 +41,15 @@ export class ApiClient {
 
   async updateConfig(request: ConfigChangeRequest, signal?: AbortSignal): Promise<void> {
     await this.request<void>('POST', '/api/v1/config', request, signal)
+  }
+
+  /**
+   * Polls the last-known tally state (§4.3). The PC's primary tally path is a
+   * UDP broadcast browsers cannot receive, so this assumes a small REST mirror
+   * at `GET /api/v1/tally`; see phone-bridge README for the integration note.
+   */
+  async getTallyState(signal?: AbortSignal): Promise<TallyState> {
+    return this.request<TallyState>('GET', '/api/v1/tally', undefined, signal)
   }
 
   private async request<T>(
