@@ -33,12 +33,14 @@ public sealed record AppConfig(
     int WebPort,
     int ProjectorDisplayIndex,
     IReadOnlyList<CompositeButtonMapping> CompositeButtonMappings,
-    IReadOnlyList<AtemButtonMapping> AtemButtonMappings)
+    IReadOnlyList<AtemButtonMapping> AtemButtonMappings,
+    int OperatorDisplayIndex = 0)
 {
     public static AppConfig CreateDefault() => new(
         AtemIp: "192.168.10.240",
         WebPort: Contracts.ProtocolConstants.WebPort,
         ProjectorDisplayIndex: 1,
+        OperatorDisplayIndex: 0,
         CompositeButtonMappings:
         [
             new CompositeButtonMapping("main", 0, CompositeAction.Take, null),

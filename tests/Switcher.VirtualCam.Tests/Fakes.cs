@@ -1,6 +1,7 @@
 using Switcher.Contracts;
 using Switcher.VirtualCam.Devices;
 using Switcher.VirtualCam.Display;
+using Switcher.VirtualCam.Ndi;
 
 namespace Switcher.VirtualCam.Tests;
 
@@ -58,6 +59,72 @@ internal sealed class FakeDualVirtualCameraOutput : IDualVirtualCameraOutput
 
         SubmitFrameCalls.Add((sink, frame));
     }
+
+    public void Stop() => StopCount++;
+}
+
+/// <summary>Controllable stand-in for the native NDI Sender: records every call so tests can assert on
+/// lifecycle/sender-name/resolution behavior, and can simulate the NDI SDK being absent
+/// (<see cref="IsAvailable"/> = <c>false</c>), without the platform NDI runtime.</summary>
+internal sealed class FakeNdiSenderDevice : INdiSenderDevice
+{
+    public bool IsAvailable { get; set; } = true;
+
+    public List<(string Name, int Width, int Height)> OpenCalls { get; } = [];
+
+    public List<FrameData> SendCalls { get; } = [];
+
+    public int CloseCount { get; private set; }
+
+    public int DisposeCount { get; private set; }
+
+    public bool ThrowOnOpen { get; set; }
+
+    public void Open(string senderName, int width, int height)
+    {
+        if (ThrowOnOpen)
+        {
+            throw new InvalidOperationException("Simulated NDI sender failure.");
+        }
+
+        OpenCalls.Add((senderName, width, height));
+    }
+
+    public void Send(FrameData frame) => SendCalls.Add(frame);
+
+    public void Close() => CloseCount++;
+
+    public void Dispose() => DisposeCount++;
+}
+
+/// <summary>Controllable stand-in for <see cref="IDualNdiOutput"/>: records every call so
+/// <see cref="OutputRouterTests"/> can assert on NDI frame fan-out and sender-name propagation without a
+/// real NDI runtime.</summary>
+internal sealed class FakeDualNdiOutput : IDualNdiOutput
+{
+    public List<(OutputSink Sink, FrameData Frame)> SubmitFrameCalls { get; } = [];
+
+    public List<(OutputSink Sink, string SenderName)> SetSenderNameCalls { get; } = [];
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public OutputSink? ThrowOnSubmitToSink { get; set; }
+
+    public void Start() => StartCount++;
+
+    public void SubmitFrame(OutputSink sink, FrameData frame)
+    {
+        if (sink == ThrowOnSubmitToSink)
+        {
+            throw new InvalidOperationException($"Simulated failure submitting to {sink}.");
+        }
+
+        SubmitFrameCalls.Add((sink, frame));
+    }
+
+    public void SetSenderName(OutputSink sink, string senderName) => SetSenderNameCalls.Add((sink, senderName));
 
     public void Stop() => StopCount++;
 }

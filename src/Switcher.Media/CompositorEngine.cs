@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Switcher.Contracts;
 using Switcher.Media.Compositing;
+using Switcher.Media.Multiview;
 
 namespace Switcher.Media;
 
@@ -157,6 +158,106 @@ public sealed class CompositorEngine : ICompositorEngine, IDisposable
                 state.PreviewScene = PipLayoutCalculator.BuildScene(state.PreviewSettings);
             }
         }
+    }
+
+    /// <summary>Synthetic channel numbers for the composed PGM/PVW feeds referenced by multiview
+    /// content selectors. Negative so they never collide with real input channels (allocated from 0).</summary>
+    private const int MultiviewChannelPgm1 = -1;
+    private const int MultiviewChannelPgm2 = -2;
+    private const int MultiviewChannelPvw1 = -3;
+    private const int MultiviewChannelPvw2 = -4;
+
+    /// <summary>Composites a multiview preview frame from <paramref name="layout"/>
+    /// (docs/specs/multiview-output-revision.md §2.3). Each region resolves its <c>content</c>
+    /// ("PGM1"|"PGM2"|"PVW1"|"PVW2"|"SRC:&lt;id&gt;"|"EMPTY") to a source frame and is drawn, enlarged,
+    /// into its rectangle; combined cells therefore show one feed blown up across the merged area.
+    /// <c>EMPTY</c> and unresolvable selectors draw nothing, leaving the black canvas showing through.
+    /// The legacy 4x4 <c>cells</c> form is normalized to 16 1x1 regions and behaves as before.</summary>
+    public FrameData GetMultiviewFrame(MultiviewLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var tiles = MultiviewLayoutCalculator.Build(layout, _canvasWidth, _canvasHeight);
+        var layers = new List<CompositedLayer>(tiles.Count);
+        var composedFeeds = new Dictionary<int, FrameData?>();
+
+        var zOrder = 0;
+        foreach (var tile in tiles)
+        {
+            if (!TryResolveMultiviewChannel(tile.Content, composedFeeds, out var channel))
+            {
+                continue;
+            }
+
+            var placement = new PipSettings(
+                Enabled: true,
+                X: tile.X,
+                Y: tile.Y,
+                Width: tile.Width,
+                Height: tile.Height,
+                Opacity: 1.0,
+                ZOrder: zOrder++,
+                Crop: null);
+            layers.Add(new CompositedLayer(channel, placement));
+        }
+
+        FrameData? Lookup(int channel) => channel < 0
+            ? (composedFeeds.TryGetValue(channel, out var feed) ? feed : null)
+            : TryGetFrame(channel);
+
+        return _gpuCompositor.Compose(layers, Lookup, _canvasWidth, _canvasHeight);
+    }
+
+    // Maps a multiview content selector to a lookup channel, rendering (and caching) the composed
+    // PGM/PVW feed a selector needs on first use. EMPTY, malformed, and unresolvable SRC:<id> selectors
+    // return false so their tile stays black rather than failing the whole multiview, matching the
+    // engine's per-source failure isolation.
+    private bool TryResolveMultiviewChannel(string content, Dictionary<int, FrameData?> composedFeeds, out int channel)
+    {
+        switch (content)
+        {
+            case "PGM1":
+                channel = MultiviewChannelPgm1;
+                CacheComposedFeed(channel, ProgramBus.Pgm1, program: true, composedFeeds);
+                return true;
+            case "PGM2":
+                channel = MultiviewChannelPgm2;
+                CacheComposedFeed(channel, ProgramBus.Pgm2, program: true, composedFeeds);
+                return true;
+            case "PVW1":
+                channel = MultiviewChannelPvw1;
+                CacheComposedFeed(channel, ProgramBus.Pgm1, program: false, composedFeeds);
+                return true;
+            case "PVW2":
+                channel = MultiviewChannelPvw2;
+                CacheComposedFeed(channel, ProgramBus.Pgm2, program: false, composedFeeds);
+                return true;
+            default:
+                if (content is not null && content.StartsWith("SRC:", StringComparison.Ordinal))
+                {
+                    return _frameSource.TryResolveChannel(content["SRC:".Length..], out channel);
+                }
+
+                channel = 0;
+                return false;
+        }
+    }
+
+    private void CacheComposedFeed(int channel, ProgramBus bus, bool program, Dictionary<int, FrameData?> composedFeeds)
+    {
+        if (composedFeeds.ContainsKey(channel))
+        {
+            return;
+        }
+
+        var state = _buses[bus];
+        IReadOnlyList<CompositedLayer> scene;
+        lock (state.Lock)
+        {
+            scene = program ? state.ProgramScene : state.PreviewScene;
+        }
+
+        composedFeeds[channel] = Render(scene);
     }
 
     private FrameData Render(IReadOnlyList<CompositedLayer> scene) =>

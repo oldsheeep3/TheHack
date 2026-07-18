@@ -102,6 +102,35 @@ internal sealed class FakeInputSourceManager : IInputSourceManager
 }
 
 /// <summary>
+/// In-memory <see cref="IDeviceQueryService"/> returning canned enumeration/SRT results, so the
+/// devices/SRT endpoints can be exercised without touching the OS or the Media implementation.
+/// </summary>
+internal sealed class FakeDeviceQueryService : IDeviceQueryService
+{
+    private readonly IReadOnlyDictionary<DeviceQueryType, IReadOnlyList<DeviceInfo>> _devices;
+    private readonly SrtSetupInfo _srtSetup;
+
+    public FakeDeviceQueryService(
+        IReadOnlyDictionary<DeviceQueryType, IReadOnlyList<DeviceInfo>>? devices = null,
+        SrtSetupInfo? srtSetup = null)
+    {
+        _devices = devices ?? new Dictionary<DeviceQueryType, IReadOnlyList<DeviceInfo>>();
+        _srtSetup = srtSetup ?? new SrtSetupInfo(9000, ["192.168.1.50"], "srt://192.168.1.50:9000", 120, "Point your encoder here.");
+    }
+
+    public List<DeviceQueryType> EnumerateCalls { get; } = [];
+
+    public Task<IReadOnlyList<DeviceInfo>> EnumerateAsync(DeviceQueryType type, CancellationToken ct = default)
+    {
+        EnumerateCalls.Add(type);
+        var result = _devices.TryGetValue(type, out var devices) ? devices : Array.Empty<DeviceInfo>();
+        return Task.FromResult(result);
+    }
+
+    public Task<SrtSetupInfo> GetSrtSetupAsync(CancellationToken ct = default) => Task.FromResult(_srtSetup);
+}
+
+/// <summary>
 /// Records every <see cref="Enqueue"/> call and detects re-entrancy, so tests can assert that
 /// <see cref="ControllerInputQueue"/> delivers events one at a time even under concurrent producers.
 /// </summary>

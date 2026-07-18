@@ -29,7 +29,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Status bar: 2-bus tally + ATEM connection state -->
+        <!-- Status bar: 2-bus tally + ATEM connection state + operator-display / projector controls -->
         <Border Grid.Row="0" Background="#FF101014" Padding="8">
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="PGM1:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
@@ -42,31 +42,72 @@
                 <TextBlock x:Name="ActivePvw2Text" Text="-" Margin="0,0,16,0" />
                 <TextBlock Text="ATEM:" Margin="0,0,4,0" FontWeight="Bold" />
                 <TextBlock x:Name="AtemStateText" Text="Disconnected" Margin="0,0,16,0" />
+                <TextBlock Text="Operator display:" Margin="0,0,4,0" FontWeight="Bold" />
+                <ComboBox x:Name="OperatorDisplayCombo" Width="220" DisplayMemberPath="Label" Margin="0,0,4,0" />
+                <Button x:Name="MoveOperatorButton" Content="Move" Padding="8,2" Margin="0,0,16,0" Click="OnMoveOperatorClick" />
                 <Button x:Name="OpenProjectorButton" Content="Open Projector" Padding="8,2" Click="OnOpenProjectorClick" />
             </StackPanel>
         </Border>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="300" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="340" />
             </Grid.ColumnDefinitions>
 
-            <!-- Source dock: add-source form + tile list (§2.1 OBS-style free add/remove) -->
+            <!-- Source dock: 3-stage add form (name/type/device) + tile list (requirement 6/7) -->
             <DockPanel Grid.Column="0">
                 <Border DockPanel.Dock="Top" Style="{StaticResource TileBorder}">
                     <StackPanel>
                         <TextBlock Text="Add Source" FontWeight="Bold" />
-                        <TextBox x:Name="NewSourceIdBox" ToolTip="id" />
+
+                        <TextBlock Text="1. Name" Opacity="0.7" Margin="0,4,0,0" />
                         <TextBox x:Name="NewSourceNameBox" ToolTip="name" />
-                        <ComboBox x:Name="NewSourceTypeCombo" SelectedIndex="0">
-                            <ComboBoxItem Content="NDI" />
+
+                        <TextBlock Text="2. Type" Opacity="0.7" Margin="0,4,0,0" />
+                        <ComboBox x:Name="NewSourceTypeCombo" SelectionChanged="OnSourceTypeChanged">
                             <ComboBoxItem Content="WEBCAM" />
+                            <ComboBoxItem Content="NDI" />
                             <ComboBoxItem Content="SRT" />
                         </ComboBox>
-                        <TextBox x:Name="NewSourceConfigBox" ToolTip="NDI source name / webcam device id / SRT url" />
-                        <Button Content="Add" Click="OnAddSourceClick" Margin="0,4,0,0" />
+
+                        <!-- Device dropdown (WEBCAM/NDI) -->
+                        <StackPanel x:Name="DeviceSelectPanel">
+                            <TextBlock Text="3. Device" Opacity="0.7" Margin="0,4,0,0" />
+                            <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name" />
+                            <TextBlock x:Name="NoDevicesText"
+                                       Text="No devices found. Connect the device and press Rescan."
+                                       Opacity="0.7" TextWrapping="Wrap" Visibility="Collapsed" />
+                            <Button Content="Rescan" Click="OnRescanDevicesClick" Margin="0,4,0,0" />
+                        </StackPanel>
+
+                        <!-- SRT connection settings + setup helper (requirement 6/7) -->
+                        <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
+                            <TextBlock Text="3. SRT connection" Opacity="0.7" Margin="0,4,0,0" />
+                            <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
+                                <ComboBoxItem Content="Listener" />
+                                <ComboBoxItem Content="Caller" />
+                            </ComboBox>
+                            <TextBlock Text="URL" Opacity="0.7" />
+                            <TextBox x:Name="SrtUrlBox" ToolTip="srt://host:port" />
+                            <TextBlock Text="Latency (ms)" Opacity="0.7" />
+                            <TextBox x:Name="SrtLatencyBox" Text="40" />
+                            <Border Background="#FF14141A" Margin="0,4,0,0" Padding="6">
+                                <StackPanel>
+                                    <TextBlock Text="SRT setup" FontWeight="Bold" />
+                                    <TextBlock x:Name="SrtSetupText" TextWrapping="Wrap" Opacity="0.85" />
+                                    <TextBlock Text="Recommended URL" Opacity="0.7" Margin="0,4,0,0" />
+                                    <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
+                                    <TextBlock Text="Host candidates" Opacity="0.7" Margin="0,4,0,0" />
+                                    <ListBox x:Name="SrtHostsList" MaxHeight="80" Background="#FF1A1A22" Foreground="White" />
+                                    <TextBlock x:Name="SrtAtemText" Opacity="0.7" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <Button Content="Add" Click="OnAddSourceClick" Margin="0,6,0,0" />
                     </StackPanel>
                 </Border>
 
@@ -90,27 +131,64 @@
                 </ScrollViewer>
             </DockPanel>
 
-            <!-- 4x4 configurable multiview (§2.2/§5): each cell freely assigned to PGM1/PGM2/PVW1/PVW2/SRC:<id>/EMPTY -->
-            <ItemsControl Grid.Column="1" x:Name="MultiviewControl">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <UniformGrid Rows="4" Columns="4" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border Style="{StaticResource TileBorder}" BorderBrush="{Binding BorderBrush}" BorderThickness="2">
-                            <DockPanel>
-                                <ComboBox DockPanel.Dock="Top"
-                                          ItemsSource="{Binding AvailableTokens}"
-                                          SelectedItem="{Binding Token, Mode=TwoWay}"
-                                          SelectionChanged="OnMultiviewCellSelectionChanged" />
-                                <Image Source="{Binding Image}" Stretch="Uniform" />
-                            </DockPanel>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <!-- Configurable multiview with rectangular merge (requirement 3) + full-screen (requirement 4) -->
+            <DockPanel Grid.Column="1">
+                <Border DockPanel.Dock="Top" Style="{StaticResource TileBorder}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Multiview" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <Button Content="Merge selected" Click="OnMergeSelectedClick" Padding="6,2" Margin="0,0,4,0" />
+                        <Button Content="Split" Click="OnSplitSelectedClick" Padding="6,2" Margin="0,0,4,0" />
+                        <Button Content="Clear selection" Click="OnClearSelectionClick" Padding="6,2" Margin="0,0,16,0" />
+                        <TextBlock Text="Full-screen:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="MultiviewFullscreenDisplayCombo" Width="200" DisplayMemberPath="Label" Margin="0,0,4,0" />
+                        <Button Content="Show full-screen" Click="OnMultiviewFullscreenClick" Padding="6,2" />
+                    </StackPanel>
+                </Border>
+                <ItemsControl x:Name="MultiviewControl">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                            </Grid>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
+                            <Setter Property="Grid.Row" Value="{Binding Row}" />
+                            <Setter Property="Grid.Column" Value="{Binding Col}" />
+                            <Setter Property="Grid.RowSpan" Value="{Binding RowSpan}" />
+                            <Setter Property="Grid.ColumnSpan" Value="{Binding ColSpan}" />
+                        </Style>
+                    </ItemsControl.ItemContainerStyle>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource TileBorder}" BorderBrush="{Binding BorderBrush}" BorderThickness="2"
+                                    MouseLeftButtonDown="OnMultiviewCellMouseDown"
+                                    MouseEnter="OnMultiviewCellMouseEnter"
+                                    MouseLeftButtonUp="OnMultiviewCellMouseUp">
+                                <DockPanel>
+                                    <ComboBox DockPanel.Dock="Top"
+                                              ItemsSource="{Binding AvailableTokens}"
+                                              SelectedItem="{Binding Token, Mode=TwoWay}"
+                                              SelectionChanged="OnMultiviewCellSelectionChanged" />
+                                    <Image Source="{Binding Image}" Stretch="Uniform" />
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </DockPanel>
 
             <!-- Output routing + module mapping panels -->
             <ScrollViewer Grid.Column="2">
@@ -124,10 +202,16 @@
                                         <TextBlock Text="{Binding Sink}" FontWeight="Bold" />
                                         <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}" />
                                         <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="Display Id" Opacity="0.7" />
-                                            <TextBox Text="{Binding DisplayId, Mode=TwoWay}" />
+                                            <TextBlock Text="Display" Opacity="0.7" />
+                                            <ComboBox ItemsSource="{Binding AvailableDisplays}"
+                                                      DisplayMemberPath="Label"
+                                                      SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}" />
                                             <CheckBox Content="Hide Cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,4,0,0" />
                                             <CheckBox Content="Fullscreen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="NDI name" Opacity="0.7" />
+                                            <TextBox Text="{Binding NdiName, Mode=TwoWay}" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>

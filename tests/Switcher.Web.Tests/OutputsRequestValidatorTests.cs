@@ -53,4 +53,58 @@ public class OutputsRequestValidatorTests
 
         Assert.NotEmpty(errors);
     }
+
+    [Fact]
+    public void Validate_AcceptsNdiOutputWithPgmSourceAndName()
+    {
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null, "Switcher PGM1"),
+            new OutputAssignment(OutputSink.Ndi2, OutputSource.Pgm2, null, null, null, null),
+        ]);
+
+        var errors = OutputsRequestValidator.Validate(request);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_RejectsNdiOutputWithEmptyName()
+    {
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null, string.Empty),
+        ]);
+
+        var errors = OutputsRequestValidator.Validate(request);
+
+        Assert.Contains(errors, e => e.Contains("ndi_name"));
+    }
+
+    [Fact]
+    public void Validate_AllowsNdiOutputWithNullNameForDefault()
+    {
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null, null),
+        ]);
+
+        var errors = OutputsRequestValidator.Validate(request);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_RejectsNdiOutputWithInvalidSource()
+    {
+        // A source value outside PGM1/PGM2 (only reachable if a caller crafts an out-of-range enum).
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Ndi1, (OutputSource)99, null, null, null, "Feed"),
+        ]);
+
+        var errors = OutputsRequestValidator.Validate(request);
+
+        Assert.Contains(errors, e => e.Contains("source") && e.Contains("NDI"));
+    }
 }

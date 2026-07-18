@@ -1,5 +1,6 @@
 using Switcher.Contracts;
 using Switcher.Media.Compositing;
+using Switcher.Media.Devices;
 using Switcher.Media.GStreamer;
 
 namespace Switcher.Media.Tests;
@@ -63,4 +64,55 @@ internal sealed class FakeFrameSource : IFrameSource
     }
 
     public bool TryResolveChannel(string sourceId, out int channel) => ChannelsById.TryGetValue(sourceId, out channel);
+}
+
+/// <summary>Injectable stand-in for OS webcam/NDI enumeration: returns a preset list, or throws when
+/// <see cref="Throw"/> is set so tests can exercise <see cref="DeviceQueryService"/>'s failure isolation
+/// without any Windows/GStreamer/NDI dependency.</summary>
+internal sealed class FakeDeviceProvider : IWebcamDeviceProvider, INdiSourceProvider
+{
+    private readonly IReadOnlyList<DeviceInfo>? _devices;
+    private readonly bool _throw;
+
+    public FakeDeviceProvider(IReadOnlyList<DeviceInfo>? devices = null, bool @throw = false)
+    {
+        _devices = devices;
+        _throw = @throw;
+    }
+
+    public int EnumerateCount { get; private set; }
+
+    public IReadOnlyList<DeviceInfo> Enumerate()
+    {
+        EnumerateCount++;
+        if (_throw)
+        {
+            throw new InvalidOperationException("Simulated device enumeration failure.");
+        }
+
+        return _devices!;
+    }
+}
+
+/// <summary>Deterministic LAN address list for <see cref="DeviceQueryService"/> SRT setup tests.</summary>
+internal sealed class FakeLocalAddressProvider : ILocalAddressProvider
+{
+    private readonly IReadOnlyList<string> _addresses;
+    private readonly bool _throw;
+
+    public FakeLocalAddressProvider(IReadOnlyList<string> addresses, bool @throw = false)
+    {
+        _addresses = addresses;
+        _throw = @throw;
+    }
+
+    public IReadOnlyList<string> GetLanIPv4Addresses()
+    {
+        if (_throw)
+        {
+            throw new InvalidOperationException("Simulated NIC probe failure.");
+        }
+
+        return _addresses;
+    }
 }

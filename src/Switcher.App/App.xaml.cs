@@ -47,7 +47,11 @@ public partial class App : System.Windows.Application
         MainWindow = mainWindow;
         mainWindow.Show();
 
-        _trayIcon = new TrayIconService(mainWindow, () => _ = ExitAsync());
+        _trayIcon = new TrayIconService(
+            mainWindow,
+            () => _ = ExitAsync(),
+            mainWindow.MoveOperatorToDisplay,
+            mainWindow.OpenMultiviewFullscreen);
         mainWindow.Closing += (_, args) =>
         {
             // Stay resident in the tray; the tray "Exit" item is the only real quit path.

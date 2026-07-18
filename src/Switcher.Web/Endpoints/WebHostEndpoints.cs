@@ -26,6 +26,9 @@ internal static class WebHostEndpoints
         endpoints.MapPost("/api/v1/atem/command", AtemEndpoint.PostCommandAsync);
         endpoints.MapPut("/api/v1/pico/network", PicoNetworkEndpoint.PutAsync);
 
+        endpoints.MapGet("/api/v1/devices/{type}", DevicesEndpoint.GetAsync);
+        endpoints.MapGet("/api/v1/srt/setup", SrtSetupEndpoint.GetAsync);
+
         // Superseded by the HID input path (agent-A2-004-hid-io); retained only for the optional
         // wireless controller fallback (docs/specs/pc-switcher-app.md §2.6).
         endpoints.Map("/ws", ControllerWebSocketEndpoint.HandleAsync);

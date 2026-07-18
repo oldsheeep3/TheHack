@@ -41,8 +41,11 @@
   <ItemGroup>
     <Compile Include="..\..\src\Switcher.App\Orchestration\AppOrchestrator.cs" Link="AppSources\AppOrchestrator.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\AppConfig.cs" Link="AppSources\AppConfig.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\AppConfigLoader.cs" Link="AppSources\AppConfigLoader.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfig.cs" Link="AppSources\RuntimeConfig.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigStore.cs" Link="AppSources\RuntimeConfigStore.cs" />
+    <Compile Include="..\..\src\Switcher.App\Display\DisplayConflictEvaluator.cs" Link="AppSources\DisplayConflictEvaluator.cs" />
+    <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewRegionModel.cs" Link="AppSources\MultiviewRegionModel.cs" />
   </ItemGroup>
 
 </Project>

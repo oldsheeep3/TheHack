@@ -15,6 +15,12 @@ public enum OutputSink
 
     [JsonStringEnumMemberName("HDMI")]
     Hdmi,
+
+    [JsonStringEnumMemberName("NDI1")]
+    Ndi1,
+
+    [JsonStringEnumMemberName("NDI2")]
+    Ndi2,
 }
 
 /// <summary>
@@ -34,7 +40,8 @@ public sealed record OutputAssignment(
     OutputSource Source,
     int? DisplayId,
     bool? HideCursor,
-    bool? Fullscreen);
+    bool? Fullscreen,
+    string? NdiName = null);
 
 /// <summary>
 /// Request body for PUT /api/v1/outputs (docs/specs/00-system-overview.md §4.2).

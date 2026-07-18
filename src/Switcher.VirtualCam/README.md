@@ -63,6 +63,47 @@ Either way, installing the filter is a one-time, separate native deployment step
   memory/event does not need elevation); admin is only needed once, for the filter's registry
   registration.
 
+## NDI output (2 senders)
+
+`Ndi/NdiOutput` (`INdiOutput`) publishes composited PGM frames on the network as an NDI source under a
+configurable sender name. Unlike `VirtualCameraOutput`, there is **no NV12 conversion** — NDI sends
+BGRA32 directly, so this is a separate, copy-free path from the VCAM sink (HDMI likewise takes its own
+BGRA path). Like `VirtualCameraOutput`, the sender is opened lazily on the first frame after `Start()`
+and re-opened if the resolution **or the sender name** changes mid-stream. `Ndi/DualNdiOutput`
+(`IDualNdiOutput`) manages the two independent senders NDI1/NDI2 (defaulting to sender names
+`SWITCHER PGM1` / `SWITCHER PGM2`), one per `OutputSink.Ndi1`/`Ndi2`; a failure on one (or a missing
+SDK) never affects the other.
+
+The real device, `Ndi/NdiSdkSenderDevice`, P/Invokes the NDI SDK's `NDIlib_send_*` C API. The SDK is an
+**optional, separate download**: `IsAvailable` probes for the platform runtime once
+(`Processing.NDI.Lib.x64.dll` on Windows, `libndi.so.*` on Linux, `libndi.dylib` on macOS) via a
+`DllImportResolver`, and when it is missing, `NdiOutput.SubmitFrame` becomes a **no-op that preserves
+state** — send-out is disabled gracefully rather than throwing, so a missing SDK never disrupts the
+other sinks (matching the source-side NDI download-guidance policy, docs/specs/multiview-output-revision.md
+§2.5). Like the DXGI/shared-memory components, this type **builds and links on any OS**; it only touches
+the native runtime when the SDK is present. Unit tests substitute a fake `INdiSenderDevice`.
+
+`OutputRouter` seeds the default NDI assignments (PGM1→NDI1, PGM2→NDI2) **only when an `IDualNdiOutput`
+is wired in** (without it, NDI1/NDI2 are simply unassigned, exactly like HDMI before a `display_id`).
+`ApplyOutputs` propagates each NDI assignment's `ndi_name` to the corresponding sender (an empty/absent
+`ndi_name` leaves the current name in place); `RouteFrame` fans the PGM frame out to the assigned NDI
+sender alongside the other sinks, with the same per-sink failure isolation.
+
+## Multiview full-screen presentation
+
+The multiview full-screen window (docs/specs/multiview-output-revision.md §2.4, App agent-A3-005's
+`MultiviewFullscreenWindow`) presents the multiview composite full-screen on an operator display. This is
+a **separate system** from `OutputRouter`'s sink assignments — it is not a routed VCAM/HDMI/NDI sink.
+Rather than duplicating swap-chain/cursor logic, it **reuses the HDMI presentation stack**:
+`Display/IFullscreenPresenterFactory` (default `Display/FullscreenPresenterFactory`) hands out fresh
+`IHdmiFullscreenOutput` instances (each over its own `Direct3DSwapChainOutput` + `Win32CursorVisibility`),
+so the HDMI sink and the multiview window share one presentation implementation. `hide_cursor` /
+`display_id` / `fullscreen` behave identically to HDMI.
+
+**Responsibility boundary**: this project owns presentation and the cursor-visibility policy only.
+Creating the operator window, obtaining its HWND, and placing it on the target display are App
+integration's job (agent-A3-005); the App passes that HWND to `IHdmiFullscreenOutput.Attach`.
+
 ## Physical display output
 
 `Display/ISwapChainOutput` is a thin interface — App integration owns the native window/HWND and

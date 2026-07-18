@@ -167,4 +167,106 @@ public sealed class OutputRouterTests
         Assert.Single(ex.InnerExceptions);
         Assert.Same(frame, Assert.Single(hdmi.PresentCalls));
     }
+
+    [Fact]
+    public void CurrentAssignments_WithNdiOutput_SeedsDefaultPgm1Ndi1AndPgm2Ndi2()
+    {
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput(), ndiOutput: new FakeDualNdiOutput());
+
+        var assignments = router.CurrentAssignments;
+
+        Assert.Equal(4, assignments.Count);
+        var ndi1 = Assert.Single(assignments, a => a.Sink == OutputSink.Ndi1);
+        Assert.Equal(OutputSource.Pgm1, ndi1.Source);
+        Assert.Equal("SWITCHER PGM1", ndi1.NdiName);
+        var ndi2 = Assert.Single(assignments, a => a.Sink == OutputSink.Ndi2);
+        Assert.Equal(OutputSource.Pgm2, ndi2.Source);
+        Assert.Equal("SWITCHER PGM2", ndi2.NdiName);
+    }
+
+    [Fact]
+    public void CurrentAssignments_WithoutNdiOutput_HasNoNdiSinks()
+    {
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput());
+
+        Assert.DoesNotContain(router.CurrentAssignments, a => a.Sink is OutputSink.Ndi1 or OutputSink.Ndi2);
+    }
+
+    [Fact]
+    public void RouteFrame_DefaultNdiAssignment_SendsPgm1ToNdi1AndPgm2ToNdi2()
+    {
+        var ndi = new FakeDualNdiOutput();
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput(), ndiOutput: ndi);
+        var pgm1 = MakeFrame();
+        var pgm2 = MakeFrame();
+
+        router.RouteFrame(OutputSource.Pgm1, pgm1);
+        router.RouteFrame(OutputSource.Pgm2, pgm2);
+
+        Assert.Contains(ndi.SubmitFrameCalls, c => c.Sink == OutputSink.Ndi1 && ReferenceEquals(c.Frame, pgm1));
+        Assert.Contains(ndi.SubmitFrameCalls, c => c.Sink == OutputSink.Ndi2 && ReferenceEquals(c.Frame, pgm2));
+    }
+
+    [Fact]
+    public void ApplyOutputs_ChangesNdiSourceAndPropagatesSenderName()
+    {
+        var ndi = new FakeDualNdiOutput();
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput(), ndiOutput: ndi);
+
+        router.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm2, DisplayId: null, HideCursor: null, Fullscreen: null, NdiName: "CUSTOM PGM"),
+        ]));
+
+        var assignment = Assert.Single(router.CurrentAssignments, a => a.Sink == OutputSink.Ndi1);
+        Assert.Equal(OutputSource.Pgm2, assignment.Source);
+        Assert.Equal("CUSTOM PGM", assignment.NdiName);
+        Assert.Contains((OutputSink.Ndi1, "CUSTOM PGM"), ndi.SetSenderNameCalls);
+
+        var frame = MakeFrame();
+        router.RouteFrame(OutputSource.Pgm2, frame);
+        Assert.Contains(ndi.SubmitFrameCalls, c => c.Sink == OutputSink.Ndi1);
+    }
+
+    [Fact]
+    public void ApplyOutputs_NdiWithoutNdiName_DoesNotPropagateSenderName()
+    {
+        var ndi = new FakeDualNdiOutput();
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput(), ndiOutput: ndi);
+
+        router.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, DisplayId: null, HideCursor: null, Fullscreen: null, NdiName: null),
+        ]));
+
+        Assert.Empty(ndi.SetSenderNameCalls);
+    }
+
+    [Fact]
+    public void ApplyOutputs_NdiWithInvalidSource_ThrowsAndLeavesAssignmentsUnchanged()
+    {
+        var ndi = new FakeDualNdiOutput();
+        var router = new OutputRouter(new FakeDualVirtualCameraOutput(), ndiOutput: ndi);
+
+        Assert.Throws<ArgumentException>(() => router.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Ndi1, (OutputSource)999, DisplayId: null, HideCursor: null, Fullscreen: null, NdiName: "X"),
+        ])));
+
+        Assert.Empty(ndi.SetSenderNameCalls);
+        var ndi1 = Assert.Single(router.CurrentAssignments, a => a.Sink == OutputSink.Ndi1);
+        Assert.Equal(OutputSource.Pgm1, ndi1.Source);
+    }
+
+    [Fact]
+    public void RouteFrame_NdiSinkFails_OtherSinksStillReceiveFrame()
+    {
+        var vcam = new FakeDualVirtualCameraOutput();
+        var ndi = new FakeDualNdiOutput { ThrowOnSubmitToSink = OutputSink.Ndi1 };
+        var router = new OutputRouter(vcam, ndiOutput: ndi);
+        var frame = MakeFrame();
+
+        var ex = Assert.Throws<AggregateException>(() => router.RouteFrame(OutputSource.Pgm1, frame));
+
+        Assert.Single(ex.InnerExceptions);
+        // VCAM1 (default PGM1 sink) still received the frame despite NDI1 failing.
+        Assert.Contains(vcam.SubmitFrameCalls, c => c.Sink == OutputSink.Vcam1);
+    }
 }

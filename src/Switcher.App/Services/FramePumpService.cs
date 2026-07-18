@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Switcher.Contracts;
 using Switcher.Media;
 using Switcher.VirtualCam;
+using Switcher.VirtualCam.Ndi;
 
 namespace Switcher.App.Services;
 
@@ -24,6 +25,7 @@ public sealed class FramePumpService : IAsyncDisposable
     private readonly CompositorEngine _compositor;
     private readonly InputSourceManager _sourceManager;
     private readonly IDualVirtualCameraOutput _virtualCameraOutput;
+    private readonly IDualNdiOutput _ndiOutput;
     private readonly OutputRouter _outputRouter;
     private readonly ILogger<FramePumpService> _logger;
 
@@ -37,12 +39,14 @@ public sealed class FramePumpService : IAsyncDisposable
         CompositorEngine compositor,
         InputSourceManager sourceManager,
         IDualVirtualCameraOutput virtualCameraOutput,
+        IDualNdiOutput ndiOutput,
         OutputRouter outputRouter,
         ILogger<FramePumpService> logger)
     {
         _compositor = compositor;
         _sourceManager = sourceManager;
         _virtualCameraOutput = virtualCameraOutput;
+        _ndiOutput = ndiOutput;
         _outputRouter = outputRouter;
         _logger = logger;
     }
@@ -63,6 +67,7 @@ public sealed class FramePumpService : IAsyncDisposable
         }
 
         _virtualCameraOutput.Start();
+        _ndiOutput.Start();
         _cts = new CancellationTokenSource();
         _loopTask = RunLoopAsync(_cts.Token);
     }
@@ -90,6 +95,7 @@ public sealed class FramePumpService : IAsyncDisposable
         finally
         {
             _virtualCameraOutput.Stop();
+            _ndiOutput.Stop();
             _cts.Dispose();
             _cts = null;
             _loopTask = null;

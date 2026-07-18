@@ -14,7 +14,9 @@ public sealed record RuntimeConfig(
     IReadOnlyList<string> MultiviewCells,
     IReadOnlyList<OutputAssignment> OutputAssignments,
     AtemConfig AtemConfig,
-    PicoNetworkConfig? PicoNetwork)
+    PicoNetworkConfig? PicoNetwork,
+    MultiviewGrid? MultiviewGrid = null,
+    IReadOnlyList<MultiviewRegion>? MultiviewRegions = null)
 {
     public const int MultiviewCellCount = 16;
 
@@ -23,5 +25,7 @@ public sealed record RuntimeConfig(
         MultiviewCells: Enumerable.Repeat("EMPTY", MultiviewCellCount).ToList(),
         OutputAssignments: OutputRouter.DefaultAssignments,
         AtemConfig: new AtemConfig(Enabled: false, Ip: string.Empty, Mappings: []),
-        PicoNetwork: null);
+        PicoNetwork: null,
+        MultiviewGrid: null,
+        MultiviewRegions: null);
 }

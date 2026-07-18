@@ -127,8 +127,11 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     /// the 4x4 multiview UI can mirror it.</summary>
     public event EventHandler<MultiviewLayout>? MultiviewChanged;
 
-    /// <summary>The multiview layout most recently applied (via Web or persisted from a previous run).</summary>
-    public MultiviewLayout CurrentMultiviewLayout => new(_runtimeConfig.MultiviewCells);
+    /// <summary>The multiview layout most recently applied (via Web or persisted from a previous run).
+    /// Carries the merged-region form when one was applied (requirement 3), falling back to the legacy
+    /// 16-cell form for back-compat.</summary>
+    public MultiviewLayout CurrentMultiviewLayout =>
+        new(_runtimeConfig.MultiviewCells, _runtimeConfig.MultiviewGrid, _runtimeConfig.MultiviewRegions);
 
     /// <summary>The module mappings most recently applied (via Web or persisted from a previous run).</summary>
     public IReadOnlyList<ModuleMapping> CurrentModuleMappings
@@ -234,7 +237,12 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            SaveRuntimeConfigLocked(_runtimeConfig with { MultiviewCells = layout.Cells });
+            SaveRuntimeConfigLocked(_runtimeConfig with
+            {
+                MultiviewCells = layout.Cells,
+                MultiviewGrid = layout.Grid,
+                MultiviewRegions = layout.Regions,
+            });
         }
 
         MultiviewChanged?.Invoke(this, layout);

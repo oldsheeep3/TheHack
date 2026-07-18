@@ -1,15 +1,20 @@
 using Switcher.Contracts;
 using Switcher.VirtualCam.Display;
+using Switcher.VirtualCam.Ndi;
 
 namespace Switcher.VirtualCam;
 
 /// <summary>
-/// Resolves `PUT /api/v1/outputs` assignments (docs/specs/00-system-overview.md §4.2) into a routing
-/// table (which PGM source feeds which sink) and distributes composited frames to the sinks accordingly
-/// once they arrive. Pulling frames from <c>ICompositorEngine.GetProgramFrame(bus)</c> and attaching
+/// Resolves `PUT /api/v1/outputs` assignments (docs/specs/00-system-overview.md §4.2,
+/// docs/specs/multiview-output-revision.md §2.5) into a routing table (which PGM source feeds which
+/// sink) and distributes composited frames to the sinks accordingly once they arrive. Sinks are VCAM1/2
+/// (via <see cref="IDualVirtualCameraOutput"/>, NV12), HDMI (via <see cref="IHdmiFullscreenOutput"/>),
+/// and — when an <see cref="Ndi.IDualNdiOutput"/> is supplied — NDI1/2 (BGRA, a separate copy-free path
+/// from VCAM). Pulling frames from <c>ICompositorEngine.GetProgramFrame(bus)</c> and attaching
 /// <see cref="IHdmiFullscreenOutput"/> to a real window/monitor is App integration's job
-/// (agent-A2-006); this type owns the assignment table and the fan-out once a frame is handed to
-/// <see cref="RouteFrame"/>.
+/// (agent-A2-006/A3-005); this type owns the assignment table and the fan-out once a frame is handed to
+/// <see cref="RouteFrame"/>. Multiview full-screen presentation is a separate system (see
+/// <see cref="Display.IFullscreenPresenterFactory"/>), not a routed sink.
 /// </summary>
 public sealed class OutputRouter
 {
@@ -21,18 +26,42 @@ public sealed class OutputRouter
         new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, DisplayId: null, HideCursor: null, Fullscreen: null),
     ];
 
+    /// <summary>Default NDI assignments (docs/specs/multiview-output-revision.md §2.5): PGM1→NDI1,
+    /// PGM2→NDI2, with sender names <c>SWITCHER PGM1</c>/<c>SWITCHER PGM2</c>. These are only seeded when
+    /// an <see cref="IDualNdiOutput"/> is supplied to the router (otherwise the NDI sinks are absent).</summary>
+    public static IReadOnlyList<OutputAssignment> DefaultNdiAssignments { get; } =
+    [
+        new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, DisplayId: null, HideCursor: null, Fullscreen: null, NdiName: DualNdiOutput.DefaultNdi1SenderName),
+        new OutputAssignment(OutputSink.Ndi2, OutputSource.Pgm2, DisplayId: null, HideCursor: null, Fullscreen: null, NdiName: DualNdiOutput.DefaultNdi2SenderName),
+    ];
+
     private readonly IDualVirtualCameraOutput _virtualCameraOutput;
     private readonly IHdmiFullscreenOutput? _hdmiOutput;
+    private readonly IDualNdiOutput? _ndiOutput;
     private readonly object _lock = new();
     private readonly Dictionary<OutputSink, OutputAssignment> _assignments;
 
-    public OutputRouter(IDualVirtualCameraOutput virtualCameraOutput, IHdmiFullscreenOutput? hdmiOutput = null)
+    public OutputRouter(
+        IDualVirtualCameraOutput virtualCameraOutput,
+        IHdmiFullscreenOutput? hdmiOutput = null,
+        IDualNdiOutput? ndiOutput = null)
     {
         ArgumentNullException.ThrowIfNull(virtualCameraOutput);
 
         _virtualCameraOutput = virtualCameraOutput;
         _hdmiOutput = hdmiOutput;
+        _ndiOutput = ndiOutput;
         _assignments = DefaultAssignments.ToDictionary(a => a.Sink);
+
+        // Only expose the NDI sinks when an NDI output is wired in; without it, NDI1/NDI2 are simply not
+        // assigned (matching how HDMI stays unassigned until configured).
+        if (_ndiOutput is not null)
+        {
+            foreach (var assignment in DefaultNdiAssignments)
+            {
+                _assignments[assignment.Sink] = assignment;
+            }
+        }
     }
 
     /// <summary>The currently resolved assignments, one per configured sink.</summary>
@@ -83,11 +112,29 @@ public sealed class OutputRouter
             }
         }
 
+        List<(OutputSink Sink, string NdiName)>? ndiRenames = null;
         lock (_lock)
         {
             foreach (var assignment in request.Outputs)
             {
                 _assignments[assignment.Sink] = assignment;
+
+                if ((assignment.Sink == OutputSink.Ndi1 || assignment.Sink == OutputSink.Ndi2)
+                    && !string.IsNullOrWhiteSpace(assignment.NdiName))
+                {
+                    (ndiRenames ??= []).Add((assignment.Sink, assignment.NdiName));
+                }
+            }
+        }
+
+        // Push sender-name changes outside the router lock: the NDI output takes its own lock, and this
+        // keeps the router from ever holding two locks at once (a missing/empty ndi_name leaves the
+        // current name in place, per the spec's "未指定は既定名で補完").
+        if (ndiRenames is not null && _ndiOutput is not null)
+        {
+            foreach (var (sink, ndiName) in ndiRenames)
+            {
+                _ndiOutput.SetSenderName(sink, ndiName);
             }
         }
     }
@@ -129,6 +176,10 @@ public sealed class OutputRouter
                 break;
             case OutputSink.Hdmi:
                 _hdmiOutput?.Present(frame);
+                break;
+            case OutputSink.Ndi1:
+            case OutputSink.Ndi2:
+                _ndiOutput?.SubmitFrame(sink, frame);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(sink), sink, "Unknown output sink.");

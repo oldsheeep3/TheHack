@@ -16,12 +16,14 @@ internal static class WebHostServices
         IServiceCollection services,
         ISwitcherConfigService configService,
         IInputSourceManager sourceManager,
-        IControllerInputSink inputSink)
+        IControllerInputSink inputSink,
+        IDeviceQueryService deviceQueryService)
     {
         services.AddLogging();
         services.AddSingleton(configService);
         services.AddSingleton(sourceManager);
         services.AddSingleton(inputSink);
+        services.AddSingleton(deviceQueryService);
         services.AddSingleton<ControllerInputQueue>();
 
         // Match the snake_case + string-enum wire format used across the whole protocol

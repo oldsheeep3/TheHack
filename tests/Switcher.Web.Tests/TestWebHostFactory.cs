@@ -19,8 +19,10 @@ internal static class TestWebHostFactory
     public static async Task<IHost> CreateAsync(
         ISwitcherConfigService configService,
         IInputSourceManager sourceManager,
-        IControllerInputSink inputSink)
+        IControllerInputSink inputSink,
+        IDeviceQueryService? deviceQueryService = null)
     {
+        var deviceQuery = deviceQueryService ?? new FakeDeviceQueryService();
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(webHostBuilder =>
             {
@@ -29,7 +31,7 @@ internal static class TestWebHostFactory
                     .ConfigureServices(services =>
                     {
                         services.AddRouting();
-                        WebHostServices.Configure(services, configService, sourceManager, inputSink);
+                        WebHostServices.Configure(services, configService, sourceManager, inputSink, deviceQuery);
                     })
                     .Configure(app =>
                     {

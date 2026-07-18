@@ -7,8 +7,10 @@ using Switcher.Atem;
 using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Media;
+using Switcher.Media.Devices;
 using Switcher.VirtualCam;
 using Switcher.VirtualCam.Display;
+using Switcher.VirtualCam.Ndi;
 using Switcher.Web;
 
 namespace Switcher.App.Composition;
@@ -37,19 +39,30 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ITallyBroadcaster, TallyBroadcaster>();
 
+        // Device enumeration / SRT setup (docs/specs/multiview-output-revision.md §2.6/§2.7): the
+        // Media-backed concrete is the single instance both the Web layer (GET /api/v1/devices,
+        // /api/v1/srt/setup) and the App UI's add-source/SRT-helper panels query.
+        services.AddSingleton<IDeviceQueryService>(sp =>
+            new DeviceQueryService(sp.GetRequiredService<ILoggerFactory>()));
+
         // AtemController: AppOrchestrator rebuilds and hot-swaps the real mapping (from AppConfig's
         // static bindings + the persisted RuntimeConfig's Web-driven AtemConfig) in its constructor,
         // so the mapping this is seeded with is never actually used.
         services.AddSingleton(ButtonCommandMapping.Empty);
         services.AddSingleton<AtemController>();
 
-        // Dual virtual camera / HDMI fullscreen output + the router that fans PGM1/PGM2 frames out to
-        // whichever sinks PUT /api/v1/outputs currently assigns them to.
+        // Dual virtual camera / HDMI fullscreen / dual NDI output + the router that fans PGM1/PGM2
+        // frames out to whichever sinks PUT /api/v1/outputs currently assigns them to (VCAM1/2, HDMI,
+        // NDI1/2). The multiview full-screen presenter (requirement 4) is created on demand from the
+        // shared FullscreenPresenterFactory so it reuses the exact HDMI presentation stack.
         services.AddSingleton<IDualVirtualCameraOutput, DualVirtualCameraOutput>();
         services.AddSingleton<IHdmiFullscreenOutput, HdmiFullscreenOutput>();
+        services.AddSingleton<IDualNdiOutput, DualNdiOutput>();
+        services.AddSingleton<IFullscreenPresenterFactory, FullscreenPresenterFactory>();
         services.AddSingleton(sp => new OutputRouter(
             sp.GetRequiredService<IDualVirtualCameraOutput>(),
-            sp.GetRequiredService<IHdmiFullscreenOutput>()));
+            sp.GetRequiredService<IHdmiFullscreenOutput>(),
+            sp.GetRequiredService<IDualNdiOutput>()));
 
         // Switcher.Hid: HidBacklightService is a dependency of AppOrchestrator (backlight send-out);
         // HidInputService has no dependents, only dependents-of-it (AppOrchestrator's event handlers),
@@ -72,7 +85,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ISwitcherConfigService>(),
             sp.GetRequiredService<IInputSourceManager>(),
             sp.GetRequiredService<IControllerInputSink>(),
-            config.WebPort));
+            config.WebPort,
+            sp.GetRequiredService<IDeviceQueryService>()));
 
         services.AddSingleton<FramePumpService>();
         services.AddSingleton<AppHostService>();
