@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_config test_config_sub test_state_agg
+TESTS := test_config test_config_sub test_state_agg test_backlight test_settings
 
 .PHONY: all test clean
 all: test
@@ -28,6 +28,16 @@ test_config_sub: test_config_sub.c ../src/config.c
 # state_agg.c (I2C/USB非依存の純粋関数) のみを対象にする。i2c_modules.c/usb_hid.cは
 # ハードウェアI2C/TinyUSB依存のためホストテスト対象外。
 test_state_agg: test_state_agg.c ../src/state_agg.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# backlight_codec.c (I2C/GPIO非依存の純粋関数) のみを対象にする。backlight.c(キュー+I2C書込)
+# はi2c_modules.hのハードウェア依存のためホストテスト対象外。
+test_backlight: test_backlight.c ../src/backlight_codec.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# settings_codec.c (フラッシュ/HID非依存の純粋関数) + config.c(get_controller_idフォールバック
+# 先)を対象にする。settings.c(フラッシュ消去/書込)はhardware/flash依存のためホストテスト対象外。
+test_settings: test_settings.c ../src/settings_codec.c ../src/config.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

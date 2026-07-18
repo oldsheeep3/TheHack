@@ -15,4 +15,9 @@ void i2c_modules_poll(void);
 // 直近のポーリング結果のスナップショットを取得する。
 void i2c_modules_get_state(module_state_array_t *out_states);
 
+// module_index (0..MAX_MODULES-1) の BACKLIGHT(0x10) レジスタへ4灯分RGB(12バイト)を
+// 書き込む。ACK無し/タイムアウト/範囲外module_indexの場合は書込を行わず false を返す
+// (呼び出し側はSTATEポーリングを止めずスキップすること)。
+bool i2c_modules_write_backlight(uint8_t module_index, const uint8_t rgb[MODULE_REG_BACKLIGHT_LEN]);
+
 #endif // PICO2W_CONTROLLER_I2C_MODULES_H

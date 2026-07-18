@@ -1,11 +1,10 @@
 // ベンダー定義USB-HIDデバイス(TinyUSB依存)。
 //
-// 本タスクでは入力レポート0x01(親仕様書 §4.1, HID_REPORT_ID_STATE_IN)のみを実装する。
-// 出力レポート0x02(HID_REPORT_ID_BACKLIGHT_OUT, バックライト指定)とfeatureレポートは
-// P2-002で追加する。config.hに契約(report ID/長さ)は用意済みのため、P2-002では
-// 下記 desc_hid_report にOutputアイテムを追記し、EPNUM_HID_OUTを持つ
-// TUD_HID_INOUT_DESCRIPTOR へ切り替え、tud_hid_set_report_cb を実装すればよい
-// (呼び出し側の公開APIはこのファイル内で完結するよう設計している)。
+// 入力レポート0x01(親仕様書 §4.1, HID_REPORT_ID_STATE_IN)に加え、出力レポート0x02
+// (HID_REPORT_ID_BACKLIGHT_OUT, バックライト指定, §2.3)とfeatureレポート
+// (HID_REPORT_ID_SETTINGS_FEATURE, 設定投入/読出, §4.6)を実装する。出力/feature
+// レポートの受信自体はこのファイルで受け、実処理(パース・キュー投入・フラッシュ保存)は
+// backlight.c/settings.cへ委譲する。
 //
 // pico_enable_stdio_usb(CMakeLists参照)は使わず、本ファイルで独自のUSBデバイス記述子
 // (デバイス/コンフィグ/文字列/HIDレポート)を定義する。stdio_usbは固定のCDC記述子
@@ -19,7 +18,9 @@
 
 #include "tusb.h"
 
+#include "backlight.h"
 #include "config.h"
+#include "settings.h"
 
 // TinyUSBがOSSプロジェクトのテスト用途に公開している共有VID/PID。
 // 量産時は独自のUSB VID/PIDを取得して差し替えること(TODO, 実機検証未了)。
@@ -51,11 +52,13 @@ uint8_t const *tud_descriptor_device_cb(void) {
 }
 
 // ---- HIDレポートディスクリプタ ----
-// ベンダー定義(Usage Page 0xFF00)。入力レポート0x01のみ(親仕様書 §4.1)。
+// ベンダー定義(Usage Page 0xFF00)。入力レポート0x01・出力レポート0x02・featureレポート
+// (設定)の3つのReport IDを同一コレクション内に持つ(親仕様書 §4.1/§4.6)。
 static uint8_t const desc_hid_report[] = {
-    0x06, 0x00, 0xFF,              // Usage Page (Vendor Defined 0xFF00)
-    0x09, 0x01,                    // Usage (0x01)
-    0xA1, 0x01,                    // Collection (Application)
+    0x06, 0x00, 0xFF, // Usage Page (Vendor Defined 0xFF00)
+    0x09, 0x01,       // Usage (0x01)
+    0xA1, 0x01,       // Collection (Application)
+
     0x85, HID_REPORT_ID_STATE_IN,  //   Report ID (1)
     0x09, 0x02,                    //   Usage (0x02)
     0x15, 0x00,                    //   Logical Minimum (0)
@@ -63,7 +66,24 @@ static uint8_t const desc_hid_report[] = {
     0x75, 0x08,                    //   Report Size (8)
     0x95, HID_REPORT_STATE_IN_LEN, //   Report Count
     0x81, 0x02,                    //   Input (Data,Var,Abs)
-    0xC0,                          // End Collection
+
+    0x85, HID_REPORT_ID_BACKLIGHT_OUT,  //   Report ID (2)
+    0x09, 0x03,                         //   Usage (0x03)
+    0x15, 0x00,                         //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,                    //   Logical Maximum (255)
+    0x75, 0x08,                         //   Report Size (8)
+    0x95, HID_REPORT_BACKLIGHT_OUT_LEN, //   Report Count
+    0x91, 0x02,                         //   Output (Data,Var,Abs)
+
+    0x85, HID_REPORT_ID_SETTINGS_FEATURE, //   Report ID (3)
+    0x09, 0x04,                           //   Usage (0x04)
+    0x15, 0x00,                           //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,                      //   Logical Maximum (255)
+    0x75, 0x08,                           //   Report Size (8)
+    0x95, SETTINGS_SERIALIZED_LEN,        //   Report Count
+    0xB1, 0x02,                           //   Feature (Data,Var,Abs)
+
+    0xC0, // End Collection
 };
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
@@ -71,20 +91,25 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
     return desc_hid_report;
 }
 
-// ---- コンフィグディスクリプタ (HIDインターフェース1個, IN方向のみ) ----
+// ---- コンフィグディスクリプタ (HIDインターフェース1個, IN+OUT方向) ----
+// Featureレポート(設定)はコントロール転送(EP0)経由のため専用エンドポイントは不要。
+// 出力レポート0x02(バックライト)用にOUTエンドポイントを追加し、TUD_HID_INOUT_DESCRIPTOR
+// (TinyUSB提供マクロ)へ切り替える。クロスビルド環境が無いため、実機ビルド時にマクロ名/
+// TUD_HID_INOUT_DESC_LENが使用中のTinyUSBバージョンで提供されていることを確認すること。
 
 enum {
     ITF_NUM_HID = 0,
     ITF_NUM_TOTAL,
 };
 
+#define EPNUM_HID_OUT 0x01
 #define EPNUM_HID_IN 0x81
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN)
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
 
 static uint8_t const desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
-    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report), EPNUM_HID_IN,
-                        CFG_TUD_HID_EP_BUFSIZE, 5),
+    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report), EPNUM_HID_OUT,
+                              EPNUM_HID_IN, CFG_TUD_HID_EP_BUFSIZE, 5),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
@@ -94,7 +119,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
 
 // ---- 文字列ディスクリプタ ----
 // controller_id(main/sub)はシリアル番号文字列(index 3)で提示する
-// (get_unique_board_id() + get_controller_id(), 親仕様書 §4.1)。
+// (get_unique_board_id() + usb_hid_set_controller_id()で設定された値, 親仕様書 §4.1/§4.6)。
 
 static char const *const string_desc_arr[] = {
     NULL,                // 0: 言語ID (別途処理)
@@ -104,6 +129,15 @@ static char const *const string_desc_arr[] = {
 };
 
 static uint16_t desc_str_buf[32];
+
+// HIDシリアル文字列に載せるcontroller_id。デフォルトはビルド時ロールで、main.cが
+// 設定(settings)から解決した値をusb_hid_set_controller_id()経由で上書きする(§4.6)。
+#define USB_HID_CONTROLLER_ID_MAX_LEN 8
+static char current_controller_id[USB_HID_CONTROLLER_ID_MAX_LEN] = "main";
+
+void usb_hid_set_controller_id(const char *controller_id) {
+    snprintf(current_controller_id, sizeof(current_controller_id), "%s", controller_id);
+}
 
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
@@ -120,7 +154,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     if (index == 3) {
         char board_id[UNIQUE_BOARD_ID_STRING_BUF_SIZE];
         get_unique_board_id(board_id, sizeof(board_id));
-        snprintf(serial_buf, sizeof(serial_buf), "%s-%s", board_id, get_controller_id());
+        snprintf(serial_buf, sizeof(serial_buf), "%s-%s", board_id, current_controller_id);
         str = serial_buf;
     } else if (index < (sizeof(string_desc_arr) / sizeof(string_desc_arr[0]))) {
         str = string_desc_arr[index];
@@ -148,25 +182,28 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
 // ---- TinyUSB HIDクラスコールバック ----
 
-// GET_REPORT: feature/inレポートの明示取得要求。本タスクでは未使用(0を返す)。
+// GET_REPORT: 設定feature(HID_REPORT_ID_SETTINGS_FEATURE)の読出のみ対応する。
+// PCがフラッシュ保存済みの設定を確認・再投入判断するために使う(§4.6)。
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer,
                                 uint16_t reqlen) {
     (void)instance;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)reqlen;
+    if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_REPORT_ID_SETTINGS_FEATURE) {
+        return settings_build_feature_report(buffer, reqlen);
+    }
     return 0;
 }
 
-// SET_REPORT: 出力レポート0x02(バックライト)はP2-002で実装する。現状は無視する。
+// SET_REPORT: 出力レポート0x02(バックライト, §2.3)とfeature(設定, §4.6)を受領する。
+// いずれもパース/検証のみここから委譲し、I2C書込・フラッシュ書込は呼び出し先
+// (backlight.c/settings.c)が担う。
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
                             uint8_t const *buffer, uint16_t bufsize) {
     (void)instance;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)bufsize;
+    if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == HID_REPORT_ID_BACKLIGHT_OUT) {
+        backlight_on_output_report(buffer, bufsize);
+    } else if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_REPORT_ID_SETTINGS_FEATURE) {
+        settings_on_feature_report(buffer, bufsize);
+    }
 }
 
 // ---- 公開API ----

@@ -5,6 +5,8 @@
 
 #include "i2c_modules.h"
 
+#include <string.h>
+
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
 
@@ -69,4 +71,20 @@ void i2c_modules_poll(void) {
 
 void i2c_modules_get_state(module_state_array_t *out_states) {
     *out_states = shared_states;
+}
+
+bool i2c_modules_write_backlight(uint8_t module_index, const uint8_t rgb[MODULE_REG_BACKLIGHT_LEN]) {
+    if (module_index >= MAX_MODULES) {
+        return false;
+    }
+
+    uint8_t addr = (uint8_t)(MODULE_I2C_ADDR_BASE + module_index);
+    uint8_t buf[1 + MODULE_REG_BACKLIGHT_LEN];
+    buf[0] = MODULE_REG_BACKLIGHT;
+    memcpy(&buf[1], rgb, MODULE_REG_BACKLIGHT_LEN);
+
+    // STATEポーリングと同一バスを共有するため、メインループの単一コンテキストからの
+    // 逐次呼び出し(backlight_task経由)のみを前提とし、明示的な排他制御は行わない。
+    int written = i2c_write_timeout_us(MODULE_I2C_INSTANCE, addr, buf, sizeof(buf), false, MODULE_I2C_TIMEOUT_US);
+    return written == (int)sizeof(buf);
 }

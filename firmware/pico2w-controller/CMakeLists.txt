@@ -19,6 +19,10 @@ add_executable(pico2w_controller
     src/i2c_modules.c
     src/state_agg.c
     src/usb_hid.c
+    src/backlight.c
+    src/backlight_codec.c
+    src/settings.c
+    src/settings_codec.c
 )
 
 target_include_directories(pico2w_controller PRIVATE
@@ -37,6 +41,8 @@ target_link_libraries(pico2w_controller
     tinyusb_board
     hardware_gpio
     hardware_i2c
+    hardware_flash
+    hardware_sync
 )
 
 # CYW43 (Wi-Fi) は P2-003 で有効化予定。

@@ -22,7 +22,7 @@
 #define MODULE_REG_STATE 0x00
 #define MODULE_REG_STATE_LEN 3 // [0]SW状態(下位4bit) / [1]VR_SRC1(0..255) / [2]VR_SRC2(0..255)
 #define MODULE_REG_BACKLIGHT 0x10
-#define MODULE_REG_BACKLIGHT_LEN 12 // 4灯分RGB(契約のみ, 実装はP2-002)
+#define MODULE_REG_BACKLIGHT_LEN 12 // 4灯分RGB(write, P2-002で実装)
 #define MODULE_REG_INFO 0xF0
 #define MODULE_REG_INFO_LEN 4 // [0..1]fw version / [2]capabilities / [3]HW rev(契約のみ, 未使用)
 
@@ -34,13 +34,14 @@
 #define MODULE_POLL_INTERVAL_MS 1
 
 // ---- USB-HID レポート (親仕様書 §4.1) ----
-#define HID_REPORT_ID_STATE_IN 0x01      // Pico→PC: 集約状態(本タスクで実装)
-#define HID_REPORT_ID_BACKLIGHT_OUT 0x02 // PC→Pico: バックライト指定(契約のみ, 実装はP2-002)
+#define HID_REPORT_ID_STATE_IN 0x01          // Pico→PC: 集約状態
+#define HID_REPORT_ID_BACKLIGHT_OUT 0x02     // PC→Pico: バックライト指定(P2-002で実装)
+#define HID_REPORT_ID_SETTINGS_FEATURE 0x03  // PC<->Pico: 設定投入/読出(feature, P2-002で実装, §4.6)
 
 // 入力レポート0x01のバイト長 = module_present(1) + SW×MAX_MODULES + VR×2×MAX_MODULES + seq(1)
 #define HID_REPORT_STATE_IN_LEN (1 + MAX_MODULES + 2 * MAX_MODULES + 1)
 
-// 出力レポート0x02のバイト長 = module_index(1) + RGB×4灯(12バイト)(契約のみ, 実装はP2-002)
+// 出力レポート0x02のバイト長 = module_index(1) + RGB×4灯(12バイト)
 #define HID_REPORT_BACKLIGHT_OUT_LEN (1 + 12)
 
 // 状態変化が無くても定期送出する周期(取りこぼし対策, 親仕様書 §2.2/§4.1)。
