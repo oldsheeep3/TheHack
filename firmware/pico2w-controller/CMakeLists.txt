@@ -19,6 +19,8 @@ add_executable(pico2w_controller
     src/buttons.c
     src/buttons_debounce.c
     src/usb_link.c
+    src/ddc_tally.c
+    src/ddc_tally_decode.c
 )
 
 target_include_directories(pico2w_controller PRIVATE
@@ -34,7 +36,8 @@ target_link_libraries(pico2w_controller
     pico_unique_id
     tinyusb_device
     tinyusb_board
-    hardware_i2c
+    hardware_gpio
+    hardware_sync
 )
 
 # CYW43 (Wi-Fi) は P-004 で有効化予定。

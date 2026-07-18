@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_config test_config_sub test_buttons
+TESTS := test_config test_config_sub test_buttons test_ddc_tally
 
 .PHONY: all test clean
 all: test
@@ -27,6 +27,10 @@ test_config_sub: test_config_sub.c ../src/config.c
 
 # buttons.c (GPIO依存) は含めず、Pico SDK非依存の buttons_debounce.c のみを対象にする。
 test_buttons: test_buttons.c ../src/buttons_debounce.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# ddc_tally.c (GPIO/割込み依存) は含めず、Pico SDK非依存の ddc_tally_decode.c のみを対象にする。
+test_ddc_tally: test_ddc_tally.c ../src/ddc_tally_decode.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

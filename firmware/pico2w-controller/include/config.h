@@ -18,10 +18,27 @@ extern const uint8_t BUTTON_COL_PINS[BUTTON_MATRIX_MAX_COLS];
 #define TALLY_LED_GREEN_PIN 15
 
 // ---- I2C (HDMI DDCライン スニッフィング用) ----
-#define DDC_I2C_PORT i2c0
+// 注意: ハードウェアI2Cペリフェラルは「自アドレス宛の通信にのみACKし応答する」
+// 仕組みのため、ATEM↔カメラ間(我々のアドレス宛ではない)通信を正しく傍受できない。
+// そのため ddc_tally.c では DDC_I2C_SDA_PIN/DDC_I2C_SCL_PIN をハードウェアI2Cに
+// マッピングせず、プレーンGPIO入力+エッジ割込みでバスを直接モニタする
+// (ビットバンによるパッシブスニッフィング、バスへは一切書き込まない)。
 #define DDC_I2C_SDA_PIN 4
 #define DDC_I2C_SCL_PIN 5
-#define DDC_I2C_BAUDRATE_HZ (100 * 1000)
+
+// ---- タリー対象カメラ / DDCタリー用I2Cアドレス ----
+// TALLY_CAMERA_ID: このドングルが監視するカメラの番号(1始まり, 0はブロードキャスト
+// 予約のため使用しない)。ビルド時定義 (-DTALLY_CAMERA_ID=N) で切り替える。
+#ifndef TALLY_CAMERA_ID
+#define TALLY_CAMERA_ID 1
+#endif
+
+// DDC_TALLY_I2C_ADDR: ATEM→カメラ間のタリー通知に使われると仮定する7bit I2Cアドレス。
+// 一次資料で未確認の仮定値 (TODO: 実機のDDCラインをロジックアナライザ等でキャプチャし
+// 確定させること)。EDID読み出し(0x50)以外に観測されるアドレスに差し替える想定。
+#ifndef DDC_TALLY_I2C_ADDR
+#define DDC_TALLY_I2C_ADDR 0x6E
+#endif
 
 // ---- コントローラー識別 ----
 // メイン/サブの区別はビルド時定義 (-DCONTROLLER_ROLE=CONTROLLER_ROLE_SUB) で切り替える。

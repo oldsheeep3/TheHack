@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "ddc_tally.h"
+
 // 押下イベントの送信方式は USB-CDC(シリアル) を採用する。
 // HIDはOS標準ドライバで認識できる利点があるがレポート記述子が固定長で、
 // 可変長JSONの送出やPC/スマホ双方でのデバッグ(シリアルターミナルでの目視確認)が
@@ -16,5 +18,9 @@ void usb_link_task(void);
 // USB未接続時は送信をドロップする(バッファリングしない)。メインループの走査
 // レイテンシを守るため、再接続後の再送も行わない。
 void usb_link_send_button_event(uint8_t button_id, uint64_t timestamp_ms);
+
+// タリー状態変化イベント1件を §4.1 に準拠したJSON形式(event種別 "tally")で1行送出する。
+// button_press と同様、USB未接続時はドロップし、バッファリング・再送は行わない。
+void usb_link_send_tally_event(tally_state_t state, uint64_t timestamp_ms);
 
 #endif // PICO2W_CONTROLLER_USB_LINK_H

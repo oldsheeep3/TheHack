@@ -11,3 +11,4 @@
 firmware/pico2w-controller/test/test_config
 firmware/pico2w-controller/test/test_config_sub
 firmware/pico2w-controller/test/test_buttons
+firmware/pico2w-controller/test/test_ddc_tally

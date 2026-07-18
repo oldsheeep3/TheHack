@@ -1,7 +1,7 @@
 ---
 name: agent-P-003-ddc-tally-extraction
-status: planning
-pid:
+status: doing
+pid: 310048
 agent_cli: sonnet
 ---
 
