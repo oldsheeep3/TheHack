@@ -8,7 +8,7 @@ all: flash
 # switcher_module.c (このディレクトリ直下, ch32v003fun の規約で $(TARGET).c が必須) は
 # src/main.c を include するだけの薄いエントリポイント。実体はすべて src/ 配下に置く。
 TARGET := switcher_module
-ADDITIONAL_C_FILES := src/module_config.c src/module_hooks.c src/module_index.c src/module_index_scale.c src/switches.c src/switches_debounce.c
+ADDITIONAL_C_FILES := src/module_config.c src/module_hooks.c src/module_index.c src/module_index_scale.c src/switches.c src/switches_debounce.c src/adc.c src/adc_scale.c src/backlight.c src/sk6812_frame.c
 EXTRA_CFLAGS += -Iinclude -Isrc
 
 TARGET_MCU ?= CH32V003

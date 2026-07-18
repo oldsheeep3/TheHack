@@ -21,3 +21,5 @@ firmware/switcher-module/*.o
 firmware/switcher-module/test/test_module_config
 firmware/switcher-module/test/test_module_index
 firmware/switcher-module/test/test_switches
+firmware/switcher-module/test/test_adc_scale
+firmware/switcher-module/test/test_sk6812_frame

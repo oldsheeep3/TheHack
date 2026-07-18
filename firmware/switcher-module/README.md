@@ -22,20 +22,37 @@ firmware/switcher-module/
 │   ├── module_index.c         # get_module_index() のI/Oプレースホルダ (実ADC結線はM-003)
 │   ├── module_index_scale.c   # ADC生値→モジュール番号、モジュール番号→I2Cアドレスの純粋変換 (ホストテスト対象)
 │   ├── switches.h / switches.c            # SWマトリクス走査 (GPIO依存, module_hooks strong実装)
-│   └── switches_debounce.h / switches_debounce.c
-│                                # SWデバウンス純粋状態機械 (GPIO非依存, ホストテスト対象)
+│   ├── switches_debounce.h / switches_debounce.c
+│   │                            # SWデバウンス純粋状態機械 (GPIO非依存, ホストテスト対象)
+│   ├── adc.h / adc.c            # VR_SRC1/VR_SRC2 読取 (ADC依存, module_hooks strong実装)
+│   ├── adc_scale.h / adc_scale.c
+│   │                            # ADC生値→0..255スケーリング(移動平均+デッドバンド)純粋関数 (ホストテスト対象)
+│   ├── backlight.h / backlight.c
+│   │                            # SK6812×4 800kHz GRBビットバン駆動 (GPIO依存, module_hooks strong実装)
+│   └── sk6812_frame.h / sk6812_frame.c
+│                                # RGB→GRBフレーム組み立て純粋関数 (GPIO非依存, ホストテスト対象)
 └── test/                      # ホスト(native)ビルド用ユニットテスト (ch32v003fun/クロスツールチェーン非依存)
     ├── Makefile
     ├── test_module_config.c
     ├── test_module_index.c
-    └── test_switches.c
+    ├── test_switches.c
+    ├── test_adc_scale.c
+    └── test_sk6812_frame.c
 ```
 
-`switches_*` は本タスク(M-002)で実装済み（`switches.c` がGPIO走査、`switches_debounce.c` が純粋デバウンス状態機械）。`adc_*` / `backlight_*` / `i2c_slave_*` の実処理は後続タスク（M-003/M-004）が対応する `src/*.c` を追加し、`module_hooks.h` の関数を strong 定義することで結線される。それまでは `module_hooks.c` の weak no-op が呼ばれる。
+`switches_*` は M-002 で実装済み（`switches.c` がGPIO走査、`switches_debounce.c` が純粋デバウンス状態機械）。`adc_*` / `backlight_*` は本タスク(M-003)で実装済み（`adc.c` がVR_SRC1/VR_SRC2のADC走査、`adc_scale.c` が純粋スケーリング、`backlight.c` がSK6812のビットバン駆動、`sk6812_frame.c` が純粋なRGB→GRBフレーム組み立て）。`i2c_slave_*` の実処理は後続タスク（M-004）が対応する `src/*.c` を追加し、`module_hooks.h` の関数を strong 定義することで結線される。それまでは `module_hooks.c` の weak no-op が呼ばれる。
 
 ## SWマトリクス・デバウンス
 
 4SW（`PGM1×SRC1, PGM1×SRC2, PGM2×SRC1, PGM2×SRC2`）を `switches_task()` が毎ループ走査し、生の4bitサンプル（`module_config.h` の `SW_BIT_INDEX(row, col)` 準拠のビット位置）を `switches_debounce.c` の純粋状態機械へ渡す。各SWビットは独立に `SWITCHES_DEBOUNCE_STABLE_SAMPLES`（5）回連続で同じ生値が観測された時点で確定し、`switches_get_state()` が確定4bit状態を I2C `0x00 STATE` レジスタ[0] の下位4bit形式（上位4bitは0埋め）で返す。実際のI2Cレジスタへの結線は M-004 で行う。
+
+## アナログVR読取（ADC）
+
+`adc_task()` が毎ループ `VR_ADC_CHANNELS`（`VR_SRC1`, `VR_SRC2`）を `funAnalogRead()` で読み取り、生値をADC非依存の `adc_scale.c` へ渡す。`adc_scale_update()` は幅 `ADC_SCALE_WINDOW_SIZE`（4）の移動平均でノイズを抑え、さらに `ADC_SCALE_DEADBAND`（2）未満の微小変動は出力を更新しない（バタつき抑制）。初回サンプルは移動平均バッファ全体をそのサンプルで充填し、デッドバンド判定なしで即時反映する。`adc_get_vr()` が直近のスケール済み値（0..255）を返し、I2C `0x00 STATE` レジスタ`[1]`/`[2]` への実結線は M-004 で行う。
+
+## バックライト駆動（SK6812MINI-E×4）
+
+`backlight_set_rgb()` で受け取ったRGB（4灯×3バイト、親仕様書§4.5 `0x10 BACKLIGHT` 受領形式）は、GPIO非依存の `sk6812_frame_from_rgb()` によりSK6812送出順（GRB）フレームへ変換され、`backlight_task()` が `BACKLIGHT_DATA_PIN` へ800kHzのタイミングでビットバン出力する。色の加工（補正/ガンマ等）は行わず受領値を忠実に変換・出力するのみ。フレーム末尾は80us以上のLowでリセット（フレーム確定）する。ビットバンの割込み禁止区間は1灯（3バイト）単位に区切り最小化している（仕様書§4）。ビット単位のタイミング（NOPループ回数）はdatasheet基準値へのベストエフォートであり、`module_config.h` の暫定ピン値と同様にPCB確定後・実機オシロでの再調整を要する。バックライト未受領時（初期状態）は全灯消灯（0,0,0）を送出する。I2C `0x10 BACKLIGHT` レジスタからの実結線は M-004 で行う。
 
 ## モジュール番号とI2Cアドレス
 

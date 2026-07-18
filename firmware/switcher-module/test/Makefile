@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_module_config test_module_index test_switches
+TESTS := test_module_config test_module_index test_switches test_adc_scale test_sk6812_frame
 
 .PHONY: all test clean
 all: test
@@ -28,6 +28,14 @@ test_module_index: test_module_index.c ../src/module_index_scale.c
 
 # switches.c (GPIO依存のSWマトリクス走査) は含めず、純粋部の switches_debounce.c のみを対象にする。
 test_switches: test_switches.c ../src/switches_debounce.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# adc.c (ADC依存のVR読取) は含めず、純粋部の adc_scale.c のみを対象にする。
+test_adc_scale: test_adc_scale.c ../src/adc_scale.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# backlight.c (GPIOビットバン依存のSK6812駆動) は含めず、純粋部の sk6812_frame.c のみを対象にする。
+test_sk6812_frame: test_sk6812_frame.c ../src/sk6812_frame.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
