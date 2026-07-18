@@ -112,6 +112,102 @@ public class InputSourceManagerTests
         await WaitUntilAsync(() => manager.TryGetLatestFrame(1, out var latest) && latest == frame);
     }
 
+    [Fact]
+    public void AddSource_ById_AssignsAStableOrdinalAndIsListedById()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+
+        var info = manager.AddSource(new SourceDefinition("src-a", "Cam A", SourceType.Ndi, new NdiConfig("CAM-A"), null, null));
+
+        Assert.Equal("src-a", info.Id);
+        Assert.Equal("Cam A", info.Name);
+
+        var listed = Assert.Single(manager.GetSources());
+        Assert.Equal("src-a", listed.Id);
+        Assert.Equal(info.Channel, listed.Channel);
+    }
+
+    [Fact]
+    public void AddSource_ById_CalledTwiceForTheSameId_ReplacesInPlaceKeepingTheSameChannel()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+
+        var first = manager.AddSource(new SourceDefinition("src-a", "Cam A", SourceType.Ndi, new NdiConfig("CAM-A"), null, null));
+        var second = manager.AddSource(new SourceDefinition("src-a", "Cam A2", SourceType.Ndi, new NdiConfig("CAM-A2"), null, null));
+
+        Assert.Equal(first.Channel, second.Channel);
+        var listed = Assert.Single(manager.GetSources());
+        Assert.Equal("Cam A2", listed.Name);
+    }
+
+    [Fact]
+    public void AddSource_ById_DoesNotCollideWithChannelsUsedByOtherIds()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+
+        var a = manager.AddSource(new SourceDefinition("src-a", "A", SourceType.Ndi, new NdiConfig("A"), null, null));
+        var b = manager.AddSource(new SourceDefinition("src-b", "B", SourceType.Ndi, new NdiConfig("B"), null, null));
+
+        Assert.NotEqual(a.Channel, b.Channel);
+        Assert.Equal(2, manager.GetSources().Count);
+    }
+
+    [Fact]
+    public void RemoveSource_ById_RemovesTheSourceAndFreesItsChannel()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+        manager.AddSource(new SourceDefinition("src-a", "A", SourceType.Ndi, new NdiConfig("A"), null, null));
+
+        manager.RemoveSource("src-a");
+
+        Assert.Empty(manager.GetSources());
+    }
+
+    [Fact]
+    public void RemoveSource_ById_WhenIdDoesNotExist_IsANoOp()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+
+        manager.RemoveSource("does-not-exist");
+
+        Assert.Empty(manager.GetSources());
+    }
+
+    [Fact]
+    public void Duplicate_ClonesTheSourceUnderANewGeneratedIdAndChannel()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+        var original = manager.AddSource(new SourceDefinition("src-a", "Cam A", SourceType.Ndi, new NdiConfig("CAM-A"), null, null));
+
+        var copy = manager.Duplicate("src-a");
+
+        Assert.NotEqual(original.Id, copy.Id);
+        Assert.NotEqual(original.Channel, copy.Channel);
+        Assert.Equal(2, manager.GetSources().Count);
+    }
+
+    [Fact]
+    public void Duplicate_UnknownId_Throws()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+
+        Assert.Throws<ArgumentException>(() => manager.Duplicate("does-not-exist"));
+    }
+
+    [Fact]
+    public void Reorder_ChangesListOrderWithoutChangingChannels()
+    {
+        using var manager = new InputSourceManager(NullLoggerFactory.Instance, (_, _) => new FakeGstPipeline());
+        var a = manager.AddSource(new SourceDefinition("src-a", "A", SourceType.Ndi, new NdiConfig("A"), null, null));
+        var b = manager.AddSource(new SourceDefinition("src-b", "B", SourceType.Ndi, new NdiConfig("B"), null, null));
+
+        manager.Reorder(["src-b", "src-a"]);
+
+        Assert.Equal(["src-b", "src-a"], manager.GetSources().Select(s => s.Id));
+        Assert.Equal(a.Channel, manager.GetSources().Single(s => s.Id == "src-a").Channel);
+        Assert.Equal(b.Channel, manager.GetSources().Single(s => s.Id == "src-b").Channel);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);

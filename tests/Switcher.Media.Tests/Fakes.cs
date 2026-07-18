@@ -54,9 +54,13 @@ internal sealed class FakeGpuCompositor : IGpuCompositor
 
 internal sealed class FakeFrameSource : IFrameSource
 {
+    public Dictionary<string, int> ChannelsById { get; } = new();
+
     public bool TryGetLatestFrame(int channel, out FrameData? frame)
     {
         frame = null;
         return false;
     }
+
+    public bool TryResolveChannel(string sourceId, out int channel) => ChannelsById.TryGetValue(sourceId, out channel);
 }

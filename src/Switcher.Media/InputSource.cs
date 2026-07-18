@@ -38,7 +38,10 @@ internal sealed class InputSource : IDisposable
         Func<SourceProtocol, string?, IGstPipeline> pipelineFactory,
         ILogger logger,
         TimeSpan? initialBackoff = null,
-        TimeSpan? maxBackoff = null)
+        TimeSpan? maxBackoff = null,
+        string? id = null,
+        string? name = null,
+        int? order = null)
     {
         _channel = channel;
         _protocol = protocol;
@@ -48,11 +51,32 @@ internal sealed class InputSource : IDisposable
         _initialBackoff = initialBackoff ?? DefaultInitialBackoff;
         _maxBackoff = maxBackoff ?? DefaultMaxBackoff;
 
-        _info = new SourceInfo(channel, $"ch{channel}", protocol, Resolution: null, SourceStatus.Disconnected);
+        _info = new SourceInfo(channel, name ?? $"ch{channel}", protocol, Resolution: null, SourceStatus.Disconnected, id, order);
         _thread = new Thread(RunLoop) { IsBackground = true, Name = $"input-source-ch{channel}" };
     }
 
     public SourceInfo Info => Volatile.Read(ref _info);
+
+    /// <summary>Needed by <see cref="InputSourceManager.Duplicate"/> to spin up a new
+    /// <see cref="InputSource"/> with the same pipeline configuration under a different id/channel.</summary>
+    public SourceProtocol Protocol => _protocol;
+
+    public string? SourceUrl => _sourceUrl;
+
+    /// <summary>Updates display order only (§2.1 OBS-like reorder); channel/id stay stable so §4.3
+    /// tally ordinals never change as a result of reordering.</summary>
+    public void UpdateOrder(int order)
+    {
+        var current = Info;
+        if (current.Order == order)
+        {
+            return;
+        }
+
+        var updated = current with { Order = order };
+        Volatile.Write(ref _info, updated);
+        StatusChanged?.Invoke(this, updated);
+    }
 
     /// <summary>The most recently decoded frame, if any. Reference assignment is atomic, so readers
     /// never observe a torn frame without needing a lock (double-buffering via reference swap).</summary>

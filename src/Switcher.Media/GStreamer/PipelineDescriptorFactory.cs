@@ -25,6 +25,51 @@ internal static class PipelineDescriptorFactory
         _ => throw new ArgumentOutOfRangeException(nameof(protocol), protocol, "Unsupported source protocol."),
     };
 
+    /// <summary>Builds the pipeline description for an OBS-like <see cref="SourceDefinition"/>
+    /// (docs/specs/pc-switcher-app.md §2.1) by mapping it onto the existing protocol/URL pipeline
+    /// (<see cref="Build(SourceProtocol,string?)"/>) rather than introducing a parallel build path.</summary>
+    public static string Build(SourceDefinition definition)
+    {
+        var (protocol, sourceUrl) = MapToProtocolAndUrl(definition);
+        return Build(protocol, sourceUrl);
+    }
+
+    /// <summary>Maps a <see cref="SourceType"/> and its type-specific config onto the
+    /// (<see cref="SourceProtocol"/>, source URL) pair the existing pipeline builders expect.
+    /// WebCam's <see cref="WebcamConfig.Format"/> is not yet wired in, matching the existing UVC
+    /// pipeline which has no format-selection capability either.</summary>
+    internal static (SourceProtocol Protocol, string? SourceUrl) MapToProtocolAndUrl(SourceDefinition definition) => definition.Type switch
+    {
+        SourceType.Ndi => (SourceProtocol.Ndi, definition.Ndi?.SourceName),
+        SourceType.Webcam => (SourceProtocol.Uvc, definition.Webcam?.DeviceId),
+        SourceType.Srt => (SourceProtocol.Srt, BuildSrtSourceUrl(definition.Srt)),
+        _ => throw new ArgumentOutOfRangeException(nameof(definition), definition.Type, "Unsupported source type."),
+    };
+
+    // Listener mode when no explicit URL is given (default port, per docs/specs/pc-switcher-app.md
+    // §2.1 "Listener（Port 9000）/Caller"), otherwise Caller mode to the given address. Both reflect
+    // SrtConfig.LatencyMs instead of the protocol-level BuildSrt's fixed SrtLatencyMilliseconds.
+    private static string? BuildSrtSourceUrl(SrtConfig? srt)
+    {
+        if (srt is null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(srt.Url))
+        {
+            return $"srt://:{ProtocolConstants.SrtListenPort}?mode=listener&latency={srt.LatencyMs}";
+        }
+
+        if (srt.Url.Contains("mode=", StringComparison.OrdinalIgnoreCase))
+        {
+            return srt.Url;
+        }
+
+        var separator = srt.Url.Contains('?') ? '&' : '?';
+        return $"{srt.Url}{separator}mode=caller&latency={srt.LatencyMs}";
+    }
+
     // mfvideosrc (Media Foundation) is the primary UVC source element on modern Windows; ksvideosrc
     // (DirectShow) is the legacy fallback mentioned by the spec for older capture drivers.
     private static string BuildUvc(string? sourceUrl)
