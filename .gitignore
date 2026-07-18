@@ -12,3 +12,12 @@ firmware/pico2w-controller/test/test_config
 firmware/pico2w-controller/test/test_config_sub
 firmware/pico2w-controller/test/test_buttons
 firmware/pico2w-controller/test/test_ddc_tally
+
+# switcher-module (ch32v003fun) firmware build artifacts
+firmware/switcher-module/*.elf
+firmware/switcher-module/*.bin
+firmware/switcher-module/*.hex
+firmware/switcher-module/*.lst
+firmware/switcher-module/*.o
+firmware/switcher-module/test/test_module_config
+firmware/switcher-module/test/test_module_index
