@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_module_config test_module_index
+TESTS := test_module_config test_module_index test_switches
 
 .PHONY: all test clean
 all: test
@@ -24,6 +24,10 @@ test_module_config: test_module_config.c ../src/module_config.c
 # 実ADC結線後(M-003)にPico SDK相当の依存が入る可能性があるため、純粋部
 # (module_index_scale.c) だけを対象にする。
 test_module_index: test_module_index.c ../src/module_index_scale.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+# switches.c (GPIO依存のSWマトリクス走査) は含めず、純粋部の switches_debounce.c のみを対象にする。
+test_switches: test_switches.c ../src/switches_debounce.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

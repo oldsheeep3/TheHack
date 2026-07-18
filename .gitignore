@@ -20,3 +20,4 @@ firmware/switcher-module/*.lst
 firmware/switcher-module/*.o
 firmware/switcher-module/test/test_module_config
 firmware/switcher-module/test/test_module_index
+firmware/switcher-module/test/test_switches

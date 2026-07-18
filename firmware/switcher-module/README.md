@@ -20,14 +20,22 @@ firmware/switcher-module/
 │   ├── module_hooks.c         # 上記の weak no-op デフォルト実装
 │   ├── module_index.h         # モジュール番号取得 (get_module_index) の公開API
 │   ├── module_index.c         # get_module_index() のI/Oプレースホルダ (実ADC結線はM-003)
-│   └── module_index_scale.c   # ADC生値→モジュール番号、モジュール番号→I2Cアドレスの純粋変換 (ホストテスト対象)
+│   ├── module_index_scale.c   # ADC生値→モジュール番号、モジュール番号→I2Cアドレスの純粋変換 (ホストテスト対象)
+│   ├── switches.h / switches.c            # SWマトリクス走査 (GPIO依存, module_hooks strong実装)
+│   └── switches_debounce.h / switches_debounce.c
+│                                # SWデバウンス純粋状態機械 (GPIO非依存, ホストテスト対象)
 └── test/                      # ホスト(native)ビルド用ユニットテスト (ch32v003fun/クロスツールチェーン非依存)
     ├── Makefile
     ├── test_module_config.c
-    └── test_module_index.c
+    ├── test_module_index.c
+    └── test_switches.c
 ```
 
-`switches_*` / `adc_*` / `backlight_*` / `i2c_slave_*` の実処理は後続タスク（M-002/M-003/M-004）が対応する `src/*.c` を追加し、`module_hooks.h` の関数を strong 定義することで結線される。本タスク時点では `module_hooks.c` の weak no-op が呼ばれる。
+`switches_*` は本タスク(M-002)で実装済み（`switches.c` がGPIO走査、`switches_debounce.c` が純粋デバウンス状態機械）。`adc_*` / `backlight_*` / `i2c_slave_*` の実処理は後続タスク（M-003/M-004）が対応する `src/*.c` を追加し、`module_hooks.h` の関数を strong 定義することで結線される。それまでは `module_hooks.c` の weak no-op が呼ばれる。
+
+## SWマトリクス・デバウンス
+
+4SW（`PGM1×SRC1, PGM1×SRC2, PGM2×SRC1, PGM2×SRC2`）を `switches_task()` が毎ループ走査し、生の4bitサンプル（`module_config.h` の `SW_BIT_INDEX(row, col)` 準拠のビット位置）を `switches_debounce.c` の純粋状態機械へ渡す。各SWビットは独立に `SWITCHES_DEBOUNCE_STABLE_SAMPLES`（5）回連続で同じ生値が観測された時点で確定し、`switches_get_state()` が確定4bit状態を I2C `0x00 STATE` レジスタ[0] の下位4bit形式（上位4bitは0埋め）で返す。実際のI2Cレジスタへの結線は M-004 で行う。
 
 ## モジュール番号とI2Cアドレス
 
