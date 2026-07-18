@@ -44,9 +44,9 @@ export function isSourceProtocol(value: unknown): value is SourceProtocol {
   return typeof value === 'string' && (SOURCE_PROTOCOLS as readonly string[]).includes(value)
 }
 
-export type SourceStatus = 'connected' | 'disconnected' | 'error'
+export type SourceStatus = 'Connected' | 'Disconnected' | 'Error'
 
-export const SOURCE_STATUSES: readonly SourceStatus[] = ['connected', 'disconnected', 'error']
+export const SOURCE_STATUSES: readonly SourceStatus[] = ['Connected', 'Disconnected', 'Error']
 
 export function isSourceStatus(value: unknown): value is SourceStatus {
   return typeof value === 'string' && (SOURCE_STATUSES as readonly string[]).includes(value)

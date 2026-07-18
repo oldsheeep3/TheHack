@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { RelayTab } from './bridge/RelayTab'
+import { ConfigTab } from './config/ConfigTab'
 
 type Tab = 'relay' | 'config'
 
@@ -38,17 +39,9 @@ function App(): JSX.Element {
       </nav>
 
       <main className="flex-1 p-4" role="tabpanel">
-        {activeTab === 'relay' ? <RelayTab /> : <ConfigModePlaceholder />}
+        {activeTab === 'relay' ? <RelayTab /> : <ConfigTab />}
       </main>
     </div>
-  )
-}
-
-function ConfigModePlaceholder(): JSX.Element {
-  return (
-    <p className="text-text-muted">
-      設定モード（ソース一覧・PiPレイアウト調整）は後続タスクで実装されます。
-    </p>
   )
 }
 

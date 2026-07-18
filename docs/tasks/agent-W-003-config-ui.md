@@ -1,7 +1,7 @@
 ---
 name: agent-W-003-config-ui
-status: planning
-pid:
+status: done
+pid: 325150
 agent_cli: sonnet
 ---
 
@@ -40,3 +40,23 @@ agent_cli: sonnet
 
 ## 参照
 - 仕様: `docs/specs/phone-web-bridge.md` §2.2, §5 / `docs/specs/00-system-overview.md` §4.2, §4.3
+
+---
+
+## レビュー指摘（要修正 / fixing）— 2026-07-18 by Opus 親
+
+レイアウト計算・デバウンス・プリセット・UIの責務分離は良好で、`tsc`/`test`/`build` も通っている。ただし**PC側の実配信スキーマとの型不一致（IF互換違反）が1点**あり、これを修正すること。
+
+### 指摘1（必須）: `SourceStatus` の値ケースが PC 側と不一致
+- `src/protocol/types.ts` の `SourceStatus` は小文字 `'connected' | 'disconnected' | 'error'` だが、**PC側 `Switcher.Contracts` は PascalCase で配信する**。実測とPC側テストの両方で確定済み:
+  - 実シリアライズ: `{"channel":1,"name":"cam","protocol":"UVC","resolution":"1920x1080","status":"Connected"}`
+  - PC側テスト `tests/Switcher.Web.Tests/WebApiTests.cs:93` が `Assert.Equal("Connected", ... status ...)` を検証。
+- このため `GET /api/v1/sources` の実応答（`status:"Connected"`）に対し、`ConfigTab.tsx` の `STATUS_LABEL["Connected"]` / `STATUS_COLOR["Connected"]` が **undefined** になり、ステータスのラベル空表示・`bg-undefined` でUIが壊れる。
+- 参考: `protocol` は PC側が `[JsonStringEnumMemberName("UVC")]` で大文字固定 → 現状の TS `'UVC'|'NDI'|'SRT'` で**一致済み（変更不要）**。不一致は `SourceStatus` のみ。
+- **対応**（`apps/phone-bridge/` 内。IF互換修正のため `src/protocol/types.ts` の編集可）:
+  1. `src/protocol/types.ts`: `SourceStatus` を `'Connected' | 'Disconnected' | 'Error'` に変更。`SOURCE_STATUSES` 配列と `isSourceStatus` ガードも同値へ更新。
+  2. `src/config/ConfigTab.tsx`: `STATUS_LABEL` / `STATUS_COLOR` のキーを `Connected` / `Disconnected` / `Error` に変更（ラベル文言・色は現状踏襲でよい）。
+  3. 上記に依存するテストがあれば追随。可能なら `status:"Connected"` を含む `SourceInfo` を用いた回帰テストを1件追加。
+- **検証**: `npx tsc --noEmit` エラー0、`npm run test` green、`npm run build` 成功。修正後コミットして `reviewing` へ。
+
+（参考: 送信系 §4.1/§4.2、`PipSettings`(`x_position` 等)、`TallyState`(`active_pgm`/`active_pvw`) は一致確認済み。上記の受信 `status` ケースのみ是正すればよい。）
