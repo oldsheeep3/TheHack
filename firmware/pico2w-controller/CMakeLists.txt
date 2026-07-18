@@ -16,20 +16,19 @@ add_executable(pico2w_controller
     src/main.c
     src/config.c
     src/board_id.c
-    src/buttons.c
-    src/buttons_debounce.c
-    src/usb_link.c
-    src/ddc_tally.c
-    src/ddc_tally_decode.c
+    src/i2c_modules.c
+    src/state_agg.c
+    src/usb_hid.c
 )
 
 target_include_directories(pico2w_controller PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
-# USB-CDC/HID (TinyUSB) を stdio 経由で有効化。UART stdio は無効化。
-pico_enable_stdio_usb(pico2w_controller 1)
-pico_enable_stdio_uart(pico2w_controller 0)
+# USBはベンダーHID(src/usb_hid.c)専用。固定CDCディスクリプタのpico_enable_stdio_usbとは
+# 共存できないため使わず、デバッグ用printf()はUART stdioへ出す。
+pico_enable_stdio_usb(pico2w_controller 0)
+pico_enable_stdio_uart(pico2w_controller 1)
 
 target_link_libraries(pico2w_controller
     pico_stdlib
@@ -37,10 +36,10 @@ target_link_libraries(pico2w_controller
     tinyusb_device
     tinyusb_board
     hardware_gpio
-    hardware_sync
+    hardware_i2c
 )
 
-# CYW43 (Wi-Fi) は P-004 で有効化予定。
+# CYW43 (Wi-Fi) は P2-003 で有効化予定。
 # 有効化時は target_link_libraries に pico_cyw43_arch_none もしくは
 # pico_cyw43_arch_lwip_poll / pico_cyw43_arch_lwip_threadsafe_background を追加する。
 

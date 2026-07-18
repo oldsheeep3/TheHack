@@ -1,12 +1,12 @@
 # ネイティブ(ホスト)ビルド用の最小テストランナー。
-# Pico SDK/クロスツールチェーン非依存。I/O非依存ロジック(debounce/tally decode等)を
+# Pico SDK/クロスツールチェーン非依存。I/O非依存ロジック(state_agg等)を
 # 後続タスクで追加する際は、対応する src/*.c をコピーせず src/ or include/ から直接
-# 共有し(buttons_debounce.c 参照)、このMakefileにテスト対象を追加していく。
+# 共有し(state_agg.c参照)、このMakefileにテスト対象を追加していく。
 
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_config test_config_sub test_buttons test_ddc_tally
+TESTS := test_config test_config_sub test_state_agg
 
 .PHONY: all test clean
 all: test
@@ -25,12 +25,9 @@ test_config: test_config.c ../src/config.c
 test_config_sub: test_config_sub.c ../src/config.c
 	$(CC) $(CFLAGS) -DCONTROLLER_ROLE=CONTROLLER_ROLE_SUB -o $@ $^
 
-# buttons.c (GPIO依存) は含めず、Pico SDK非依存の buttons_debounce.c のみを対象にする。
-test_buttons: test_buttons.c ../src/buttons_debounce.c
-	$(CC) $(CFLAGS) -o $@ $^
-
-# ddc_tally.c (GPIO/割込み依存) は含めず、Pico SDK非依存の ddc_tally_decode.c のみを対象にする。
-test_ddc_tally: test_ddc_tally.c ../src/ddc_tally_decode.c
+# state_agg.c (I2C/USB非依存の純粋関数) のみを対象にする。i2c_modules.c/usb_hid.cは
+# ハードウェアI2C/TinyUSB依存のためホストテスト対象外。
+test_state_agg: test_state_agg.c ../src/state_agg.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

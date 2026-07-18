@@ -2,36 +2,51 @@
 
 #include "pico/stdlib.h"
 
-#include "buttons.h"
 #include "config.h"
-#include "ddc_tally.h"
-#include "usb_link.h"
+#include "i2c_modules.h"
+#include "state_agg.h"
+#include "usb_hid.h"
 
 int main(void) {
     stdio_init_all();
 
-    buttons_init();
-    usb_link_init();
-    ddc_tally_init();
+    i2c_modules_init();
+    usb_hid_init();
 
     printf("pico2w-controller: controller_id=%s\n", get_controller_id());
 
+    module_state_array_t prev_states = {0};
+    uint8_t seq = 0;
+    uint64_t last_send_ms = 0;
+
     while (true) {
-        buttons_task();
+        i2c_modules_poll();
 
-        button_press_event_t press;
-        while (buttons_pop_event(&press)) {
-            usb_link_send_button_event(press.button_id, press.timestamp_ms);
+        module_state_array_t states;
+        i2c_modules_get_state(&states);
+
+        bool should_send = false;
+        for (int i = 0; i < MAX_MODULES; i++) {
+            if (states.modules[i].present != prev_states.modules[i].present ||
+                states.modules[i].switches != prev_states.modules[i].switches) {
+                should_send = true;
+            }
+            for (int v = 0; v < MODULE_VR_COUNT; v++) {
+                if (state_agg_vr_should_report(prev_states.modules[i].vr[v], states.modules[i].vr[v])) {
+                    should_send = true;
+                }
+            }
         }
 
-        ddc_tally_task();
-
-        tally_state_event_t tally_event;
-        while (ddc_tally_pop_event(&tally_event)) {
-            usb_link_send_tally_event(tally_event.state, tally_event.timestamp_ms);
+        uint64_t now_ms = time_us_64() / 1000;
+        if (should_send || (now_ms - last_send_ms) >= HID_STATE_SEND_INTERVAL_MS) {
+            usb_hid_send_state(&states, seq);
+            seq = (uint8_t)(seq + 1);
+            prev_states = states;
+            last_send_ms = now_ms;
         }
 
-        usb_link_task();
-        sleep_ms(BUTTON_SCAN_INTERVAL_MS);
+        usb_hid_task();
+        sleep_ms(MODULE_POLL_INTERVAL_MS);
     }
 }
