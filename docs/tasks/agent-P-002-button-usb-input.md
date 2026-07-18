@@ -1,7 +1,7 @@
 ---
 name: agent-P-002-button-usb-input
-status: planning
-pid:
+status: doing
+pid: 303216
 agent_cli: sonnet
 ---
 

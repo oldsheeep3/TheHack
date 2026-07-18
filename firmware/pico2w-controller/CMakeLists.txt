@@ -16,6 +16,9 @@ add_executable(pico2w_controller
     src/main.c
     src/config.c
     src/board_id.c
+    src/buttons.c
+    src/buttons_debounce.c
+    src/usb_link.c
 )
 
 target_include_directories(pico2w_controller PRIVATE

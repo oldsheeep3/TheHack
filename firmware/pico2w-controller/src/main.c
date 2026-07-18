@@ -3,13 +3,11 @@
 #include "hardware/i2c.h"
 #include "pico/stdlib.h"
 
+#include "buttons.h"
 #include "config.h"
+#include "usb_link.h"
 
-// 各モジュールは後続タスクで実装される。weak属性により未実装時は no-op として動作する。
-__attribute__((weak)) void buttons_init(void) {}
-__attribute__((weak)) void buttons_task(void) {}
-__attribute__((weak)) void usb_link_init(void) {}
-__attribute__((weak)) void usb_link_task(void) {}
+// ddc_tally は後続タスクで実装される。weak属性により未実装時は no-op として動作する。
 __attribute__((weak)) void ddc_tally_init(void) {}
 __attribute__((weak)) void ddc_tally_task(void) {}
 
@@ -39,8 +37,14 @@ int main(void) {
 
     while (true) {
         buttons_task();
+
+        button_press_event_t press;
+        while (buttons_pop_event(&press)) {
+            usb_link_send_button_event(press.button_id, press.timestamp_ms);
+        }
+
         usb_link_task();
         ddc_tally_task();
-        tight_loop_contents();
+        sleep_ms(BUTTON_SCAN_INTERVAL_MS);
     }
 }
