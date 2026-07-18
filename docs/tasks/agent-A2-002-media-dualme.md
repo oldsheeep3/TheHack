@@ -66,3 +66,29 @@ agent_cli: sonnet
   - 下流影響: `POST /api/v1/program` 等のWeb APIエンドポイントで2系統ME/OBS的ソース管理を公開するには、`ICompositorEngine` / `IInputSourceManager` 自体の拡張（またはインターフェースを介さず具象クラス `CompositorEngine` / `InputSourceManager` を直接参照する形へのDI変更）が別途必要。`src/Switcher.Web/` を編集範囲に持つ後続タスク（A2-003想定）が対応すること。
 - **チャンネル割当**: id ベースの `AddSource`/`Duplicate` は `_sources` に空いている最小のチャンネル番号を自動採番する（`_addLock` で排他）。同一 id への再 `AddSource` は既存チャンネルを再利用し、`RemoveSource`後の再追加でない限り番号は変わらない（§4.3 タリー安定性）。
 - **並び順**: `SourceInfo.Order` を新設せず既存の optional フィールド（A2-001が追加済み）を利用。`GetSources()` は `Order ?? Channel` でソートするため、レガシー `AddSource(int,...)` 呼び出し（Order未設定）は従来通り channel 順になり後方互換。
+
+---
+
+## レビュー指摘（要修正 / fixing）— 2026-07-18 by Opus 親
+
+2系統ME合成（`CompositorEngine`: バス単位ロック・`ApplyProgram`/`Take(bus)`/`SetSourceEnabled`/シーンスナップショット・後方互換シム）と OBS的ソース管理は設計良好で、フルビルドもクリーン。ただし**フレーキー（非決定的）に落ちるテストが1件**あり、これは実バグを示している。
+
+### 指摘1（必須）: `Reorder` の並び順が非決定的（データ競合）
+- テスト `tests/Switcher.Media.Tests/InputSourceManagerTests.Reorder_ChangesListOrderWithoutChangingChannels` が **約20%の確率で失敗**（`Expected ["src-b","src-a"]` / `Actual ["src-a","src-b"]`）。10回中数回再現。
+- 原因: `InputSource._info` を **2箇所が非アトミックな read-modify-write（`current with { ... }` → `Volatile.Write`）で更新**している:
+  1. `Reorder`→`UpdateOrder(order)` が `Order` を設定。
+  2. `InputSource` のバックグラウンド実行スレッド（`RunLoop`/`SetStatus`：接続・再接続・状態通知）が `Status`/`Resolution` を設定。
+  これらがロックなしで同じ `_info` を上書きし合うため、バックグラウンドスレッドが `Reorder` の設定した `Order` を**取りこぼす**ことがある。結果、両ソースの `Order` が同値（または null）に化け、`GetSources()` の `OrderBy(Order ?? Channel)` がタイになり、`ConcurrentDictionary` の列挙順で非決定的に並ぶ。
+- **対応（`src/Switcher.Media/` 内）**: `_info` の更新を競合しないようにする。いずれかの方針で:
+  - `InputSource` の `_info` 更新（`UpdateOrder` と `SetStatus`）を**単一ロックで直列化**する、または
+  - `Order` を racy な `_info` とは別に**独立した並び順フィールド/ストア**（例: `InputSourceManager` 側に `id→order` を保持し `GetSources()` でそれを参照）として持たせ、`_info` の read-modify-write 競合から切り離す。
+  - いずれの場合も `OrderBy` のキーが**必ず一意で安定**になるよう、タイ時の決定的な二次キー（例: `Channel`）も添える。
+- **検証**: `Reorder_ChangesListOrderWithoutChangingChannels` を含む `dotnet test tests/Switcher.Media.Tests/...` を**連続10回**実行して全て green（フレーク解消）。フルソリューションビルド警告0を維持。修正後コミットして `reviewing` へ。
+
+（参考: 合成エンジンのバス単位ロック実装は良好。今回はソース並び順の `_info` 競合のみ是正すればよい。）
+
+### 対応結果（2026-07-18）
+
+- `InputSource` に `_infoLock` を新設し、`UpdateOrder`/`SetStatus` の `_info` read-modify-write（読み取り→`with`→`Volatile.Write`）を単一ロックで直列化。両メソッドとも `StatusChanged` 発火はロック外（イベントハンドラ内で再入した場合のデッドロックを避けるため）。
+- `InputSourceManager.GetSources()` の `OrderBy(info => info.Order ?? info.Channel)` に `ThenBy(info => info.Channel)` を追加し、同値時も `Channel` で決定的に安定ソートされるようにした。
+- 検証: `Reorder_ChangesListOrderWithoutChangingChannels` を単体で **15回連続実行**して全て green。`dotnet build HybridSwitcher.sln`（警告0）/ `dotnet test HybridSwitcher.sln` も全グリーン（Switcher.Media.Tests: 48/48）。

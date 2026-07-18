@@ -25,6 +25,7 @@ internal sealed class InputSource : IDisposable
     private readonly TimeSpan _maxBackoff;
     private readonly CancellationTokenSource _cts = new();
     private readonly Thread _thread;
+    private readonly object _infoLock = new();
 
     private SourceInfo _info;
     private FrameData? _latestFrame;
@@ -67,14 +68,19 @@ internal sealed class InputSource : IDisposable
     /// tally ordinals never change as a result of reordering.</summary>
     public void UpdateOrder(int order)
     {
-        var current = Info;
-        if (current.Order == order)
+        SourceInfo updated;
+        lock (_infoLock)
         {
-            return;
+            var current = Info;
+            if (current.Order == order)
+            {
+                return;
+            }
+
+            updated = current with { Order = order };
+            Volatile.Write(ref _info, updated);
         }
 
-        var updated = current with { Order = order };
-        Volatile.Write(ref _info, updated);
         StatusChanged?.Invoke(this, updated);
     }
 
@@ -156,15 +162,20 @@ internal sealed class InputSource : IDisposable
 
     private void SetStatus(SourceStatus status, FrameData? frame = null)
     {
-        var current = Info;
-        var resolution = frame is { } f ? $"{f.Width}x{f.Height}" : current.Resolution;
-        if (current.Status == status && current.Resolution == resolution)
+        SourceInfo updated;
+        lock (_infoLock)
         {
-            return;
+            var current = Info;
+            var resolution = frame is { } f ? $"{f.Width}x{f.Height}" : current.Resolution;
+            if (current.Status == status && current.Resolution == resolution)
+            {
+                return;
+            }
+
+            updated = current with { Status = status, Resolution = resolution };
+            Volatile.Write(ref _info, updated);
         }
 
-        var updated = current with { Status = status, Resolution = resolution };
-        Volatile.Write(ref _info, updated);
         StatusChanged?.Invoke(this, updated);
     }
 

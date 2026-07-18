@@ -40,7 +40,10 @@ public sealed class InputSourceManager : IInputSourceManager, IFrameSource, IDis
     /// <summary>Ordered by display <see cref="SourceInfo.Order"/> when set (id-based sources, §2.1
     /// reorder), falling back to the stable channel ordinal for legacy int-channel sources.</summary>
     public IReadOnlyList<SourceInfo> GetSources() =>
-        _sources.Values.Select(source => source.Info).OrderBy(info => info.Order ?? info.Channel).ToList();
+        _sources.Values.Select(source => source.Info)
+            .OrderBy(info => info.Order ?? info.Channel)
+            .ThenBy(info => info.Channel)
+            .ToList();
 
     public void AddSource(int channel, SourceProtocol protocol, string? sourceUrl)
     {
