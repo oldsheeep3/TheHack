@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PipSettings } from '../../protocol/types'
-import { LocalStoragePresetStore, type ScenePreset } from '../presets'
+import { createEmptyMultiviewCells } from '../multiview'
+import { LocalStoragePresetStore, emptyScenePreset, type ScenePreset } from '../presets'
 
 const pip: PipSettings = {
   enabled: true,
@@ -13,14 +14,29 @@ const pip: PipSettings = {
   crop: null,
 }
 
+function presetWithLayer(name: string): ScenePreset {
+  const preset = emptyScenePreset(name)
+  preset.programs.PGM1 = [{ source_id: 'src-1', pip }]
+  return preset
+}
+
 beforeEach(() => {
   window.localStorage.clear()
+})
+
+describe('emptyScenePreset', () => {
+  it('starts with empty layer stacks and a fully-empty 16-cell multiview', () => {
+    const preset = emptyScenePreset('blank')
+    expect(preset.programs).toEqual({ PGM1: [], PGM2: [] })
+    expect(preset.multiview).toEqual(createEmptyMultiviewCells())
+    expect(preset.multiview).toHaveLength(16)
+  })
 })
 
 describe('LocalStoragePresetStore', () => {
   it('round-trips a saved preset through load()', () => {
     const store = new LocalStoragePresetStore()
-    const preset: ScenePreset = { name: 'wide-shot', channels: { 1: pip, 2: { ...pip, x_position: 500 } } }
+    const preset = presetWithLayer('wide-shot')
 
     store.save(preset)
 
@@ -29,8 +45,8 @@ describe('LocalStoragePresetStore', () => {
 
   it('lists saved preset names', () => {
     const store = new LocalStoragePresetStore()
-    store.save({ name: 'b', channels: { 1: pip } })
-    store.save({ name: 'a', channels: { 1: pip } })
+    store.save(emptyScenePreset('b'))
+    store.save(emptyScenePreset('a'))
 
     expect(store.list()).toEqual(['a', 'b'])
   })
@@ -42,7 +58,7 @@ describe('LocalStoragePresetStore', () => {
 
   it('removes a preset', () => {
     const store = new LocalStoragePresetStore()
-    store.save({ name: 'wide-shot', channels: { 1: pip } })
+    store.save(emptyScenePreset('wide-shot'))
 
     store.remove('wide-shot')
 
@@ -51,11 +67,11 @@ describe('LocalStoragePresetStore', () => {
   })
 
   it('recovers gracefully from corrupted storage contents', () => {
-    window.localStorage.setItem('phone-bridge:scene-presets', 'not json')
+    window.localStorage.setItem('phone-bridge:scene-presets-v2', 'not json')
     const store = new LocalStoragePresetStore()
 
     expect(store.list()).toEqual([])
-    store.save({ name: 'wide-shot', channels: { 1: pip } })
+    store.save(emptyScenePreset('wide-shot'))
     expect(store.load('wide-shot')?.name).toBe('wide-shot')
   })
 })

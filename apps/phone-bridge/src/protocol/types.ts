@@ -208,6 +208,9 @@ export interface OutputsConfig {
 
 // --- §4.2 Module assignment (physical src1/src2 -> logical source + VR target) ---
 
+/** Upper bound on module count (parent spec §4.0 `MAX_MODULES`, HID report/address-space limit). */
+export const MAX_MODULES = 8
+
 export interface ModuleSrc {
   source_id: string | null
   /** e.g. "transition" | "opacity"; kept open-ended so new target kinds don't require a contract change. */

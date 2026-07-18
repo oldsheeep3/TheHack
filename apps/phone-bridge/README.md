@@ -37,12 +37,42 @@ npm test         # vitest
 
 ## 設定モード（スイッチャー設定UI）について
 
-親仕様書の改訂（2系統ME/4x4マルチビュー/出力割当/モジュール割付/Picoネットワーク設定）に合わせ、
-「設定モード」タブは現時点ではプレースホルダ表示のみで、詳細UIは後続タスクで実装される。
-新しい `protocol/types.ts` の DTO（`SourceDefinition` / `ProgramRequest` / `MultiviewConfig` /
-`OutputsConfig` / `ModulesConfig` / `PicoNetworkConfig`）と `apiClient.ts` の対応メソッドは
-本タスクで先行整備済み。
+親仕様書の改訂（2系統ME/4x4マルチビュー/出力割当/モジュール割付/Picoネットワーク設定）に対応した
+詳細UIを実装済み。`protocol/types.ts` の DTO（`SourceDefinition` / `ProgramRequest` /
+`MultiviewConfig` / `OutputsConfig` / `ModulesConfig` / `PicoNetworkConfig`）と `apiClient.ts` の
+対応メソッドを直接利用し、独自スキーマは作らない。
 
-旧・単一チャンネル向けの `src/config/`（`ConfigTab` / `PipEditor` / プリセット等）は旧
-`ConfigChangeRequest`（`POST /api/v1/config`）を用いた実装のまま残置しており、`App.tsx` からは
-参照されていない（後続タスクが新UIへ置き換える）。
+- `src/config/SourcesPanel.tsx` … ソース一覧（`GET /api/v1/sources`）・追加/更新/削除（NDI/WEBCAM/SRT
+  判別フォーム）・表示順（`localStorage` 保持、`sourceOrder.ts`）・2系統タリーバッジ。
+- `src/config/ProgramPanel.tsx` … PGM1/PGM2 切替、レイヤー追加/削除/並べ替え、選択レイヤーの
+  PiPレイアウトを既存 `PipEditor`/`layout.ts` で編集（`debounce.ts` で送信抑制）、TAKEボタン。
+- `src/config/MultiviewPanel.tsx` … 16セルの割当編集（`multiview.ts` の純粋関数でセル整形/検証）。
+- `src/config/OutputsPanel.tsx` … VCAM1/VCAM2/HDMI 出力割当編集。
+- `src/config/ModulesPanel.tsx` … モジュール割付（`MAX_MODULES`=8 上限）＋VR割当先編集。
+- `src/config/PicoNetworkPanel.tsx` … Pico の Wi-Fi/BT 設定編集。
+- `src/config/PresetsPanel.tsx` … 拡張後の設定（2系統プログラム＋マルチビュー）のプリセット保存/読込
+  （既存 `presets.ts` の `PresetStore` 抽象を流用、`localStorage` 保管）。
+
+### 設定モードの手動確認手順
+
+1. メインPC常駐アプリ（`:8080`）を起動しておく（`/api/v1/*` が疎通すること）。
+2. 「設定モード」タブを開く。「入力ソース」に `GET /api/v1/sources` の内容が3秒毎に反映されることを確認する。
+3. 「+ ソース追加」から NDI/WEBCAM/SRT いずれかのソースを追加し（`POST /api/v1/sources`）、一覧に
+   反映されることを確認する。「編集」で更新（`PUT`）、「削除」で削除（`DELETE`）できることを確認する。
+   ↑/↓ ボタンで表示順を入れ替え、ページをリロードしても順序が保持される（`localStorage`）ことを確認する。
+4. 「2系統ME プログラム＋PiP編集」で PGM1/PGM2 タブを切り替え、レイヤーを追加し、プレビューの
+   ドラッグ/スライダーで PiP（位置/サイズ/クロップ/不透明度/Zオーダー）を編集する。連続操作中は
+   デバウンスされ、操作が止まってから `POST /api/v1/program` が送出されることを確認する。
+   「TAKE」ボタンで `take: true` が送出されることを確認する。
+5. 「4x4 マルチビュー割当」で各セルに `PGM1`/`PGM2`/`PVW1`/`PVW2`/ソース/`EMPTY` を割り当て、
+   `PUT /api/v1/multiview` が送出されることを確認する。
+6. 「出力割当」で VCAM1/VCAM2/HDMI へ PGM を割り当て（HDMIは `display_id`/カーソル非表示/全画面も）、
+   適用ボタンで `PUT /api/v1/outputs` が送出されることを確認する。
+7. 「モジュール割付」でモジュールを追加（最大8）し、`src1`/`src2` を論理ソースへ紐付け、VR割当先を
+   指定して適用（`PUT /api/v1/modules`）できることを確認する。
+8. 「Pico ネットワーク設定」で SSID/パスワード/Bluetooth を入力し送信すると `PUT /api/v1/pico/network`
+   が送出されることを確認する。
+9. ソース一覧・マルチビューのタリーバッジ（PGM1/PGM2は赤系、PVW1/PVW2は緑系）が
+   `GET /api/v1/tally`（2系統ペイロード）のポーリングに応じて切り替わることを確認する。
+10. 「シーンプリセット」で現在の2系統プログラム＋マルチビューを保存し、別内容に変更後「読込」で
+    復元されること（画面状態と `POST /api/v1/program` ×2 / `PUT /api/v1/multiview` の再送出）を確認する。

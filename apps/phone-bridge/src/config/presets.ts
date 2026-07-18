@@ -1,13 +1,16 @@
 /**
- * Scene preset storage: a saved snapshot of every channel's `PipSettings`.
- * Stored in `localStorage` today; kept behind `PresetStore` so a future
- * PC-side presets API can be swapped in without touching callers.
+ * Scene preset storage: a saved snapshot of the full 2-system ME
+ * composition (both `PgmBus` layer stacks) plus the 4x4 multiview
+ * assignment. Stored in `localStorage` today; kept behind `PresetStore` so
+ * a future PC-side presets API can be swapped in without touching callers.
  */
-import type { PipSettings } from '../protocol/types'
+import type { MultiviewCell, PgmBus, ProgramLayer } from '../protocol/types'
+import { createEmptyMultiviewCells } from './multiview'
 
 export interface ScenePreset {
   name: string
-  channels: Record<number, PipSettings>
+  programs: Record<PgmBus, ProgramLayer[]>
+  multiview: MultiviewCell[]
 }
 
 export interface PresetStore {
@@ -17,7 +20,15 @@ export interface PresetStore {
   remove(name: string): void
 }
 
-const STORAGE_KEY = 'phone-bridge:scene-presets'
+export function emptyScenePreset(name: string): ScenePreset {
+  return {
+    name,
+    programs: { PGM1: [], PGM2: [] },
+    multiview: createEmptyMultiviewCells(),
+  }
+}
+
+const STORAGE_KEY = 'phone-bridge:scene-presets-v2'
 
 export class LocalStoragePresetStore implements PresetStore {
   private readonly storage: Storage
