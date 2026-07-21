@@ -3,10 +3,9 @@ using Switcher.Contracts;
 namespace Switcher.Web;
 
 /// <summary>
-/// Facade bundling the core services (<see cref="ICompositorEngine"/> / <see cref="IInputSourceManager"/>)
-/// that the <c>/api/v1/*</c> endpoints delegate to. Implemented by the App integration layer
-/// (agent-A2-006) and injected into <see cref="WebHost"/>; the Web layer never references the core
-/// service implementations directly.
+/// Facade bundling the core mutations (backed by <see cref="IVideoEngine"/> in the App layer) that the
+/// <c>/api/v1/*</c> endpoints delegate to. Implemented by the App integration layer and injected into
+/// <see cref="WebHost"/>; the Web layer never references the core service implementations directly.
 /// </summary>
 public interface ISwitcherConfigService
 {

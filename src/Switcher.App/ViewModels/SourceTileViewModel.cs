@@ -7,10 +7,9 @@ using Brushes = System.Windows.Media.Brushes;
 namespace Switcher.App.ViewModels;
 
 /// <summary>
-/// One tile in the multiview's input-source grid. The compositor only exposes composited PGM/PVW
-/// frames (not a per-channel raw frame) through <see cref="ICompositorEngine"/>, so each input tile
-/// shows the channel's name/protocol/resolution/status rather than live per-channel video - see the
-/// note in README.md.
+/// One tile in the multiview's input-source grid. The engine exposes composited PGM/PVW frames and
+/// per-source frames via <see cref="IVideoEngine.GetFrame"/>, so each input tile shows the channel's
+/// name/protocol/resolution/status alongside its preview - see the note in README.md.
 /// </summary>
 public sealed class SourceTileViewModel : INotifyPropertyChanged
 {

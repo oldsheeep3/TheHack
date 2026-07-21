@@ -83,22 +83,61 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     }
 }
 
-internal sealed class FakeInputSourceManager : IInputSourceManager
+/// <summary>
+/// Minimal <see cref="IVideoEngine"/> test double for the Web layer: only <see cref="GetSources"/> is
+/// exercised by the endpoints (GET /api/v1/sources), so the compositing/output surface is a no-op. Named
+/// for its historical role; the Web layer depends on the engine abstraction since the libobs migration.
+/// </summary>
+internal sealed class FakeInputSourceManager : IVideoEngine
 {
     private readonly List<SourceInfo> _sources;
 
     public FakeInputSourceManager(IEnumerable<SourceInfo> sources) => _sources = [.. sources];
 
+    public Task StartAsync(EngineOptions options, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     public IReadOnlyList<SourceInfo> GetSources() => _sources;
+
+    public void AddSource(SourceDefinition source) =>
+        _sources.Add(new SourceInfo(_sources.Count, source.Name, SourceProtocol.Uvc, null, SourceStatus.Connected, source.Id, _sources.Count));
 
     public void AddSource(int channel, SourceProtocol protocol, string? sourceUrl) =>
         _sources.Add(new SourceInfo(channel, $"ch{channel}", protocol, null, SourceStatus.Connected));
 
-    public void RemoveSource(int channel) => _sources.RemoveAll(s => s.Channel == channel);
+    public void RemoveSource(string id) => _sources.RemoveAll(s => s.Id == id);
+
+    public bool TryResolveChannel(string id, out int channel)
+    {
+        var match = _sources.FirstOrDefault(s => s.Id == id);
+        channel = match?.Channel ?? -1;
+        return match is not null;
+    }
 
     public event EventHandler<SourceInfo>? SourceStatusChanged;
 
     public void RaiseStatusChanged(SourceInfo info) => SourceStatusChanged?.Invoke(this, info);
+
+    public void SetSourceEnabled(ProgramBus bus, string sourceId, bool enabled) { }
+
+    public void ApplyProgram(ProgramRequest request) { }
+
+    public void ApplyPipSettings(int channel, PipSettings settings) { }
+
+    public void Take() { }
+
+    public FrameData GetFrame(string target) => new(0, 0, ReadOnlyMemory<byte>.Empty);
+
+    public void ApplyMultiview(MultiviewLayout layout) { }
+
+    public void ApplyOutputs(OutputsRequest request) { }
+
+    public IReadOnlyList<OutputAssignment> CurrentAssignments => [];
+
+    public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId) { }
+
+    public void StopDisplayOutput(string target) { }
 }
 
 /// <summary>

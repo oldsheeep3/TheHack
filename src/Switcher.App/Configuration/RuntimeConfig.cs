@@ -1,5 +1,4 @@
 using Switcher.Contracts;
-using Switcher.VirtualCam;
 
 namespace Switcher.App.Configuration;
 
@@ -23,7 +22,7 @@ public sealed record RuntimeConfig(
     public static RuntimeConfig CreateDefault() => new(
         ModuleMappings: [],
         MultiviewCells: Enumerable.Repeat("EMPTY", MultiviewCellCount).ToList(),
-        OutputAssignments: OutputRouter.DefaultAssignments,
+        OutputAssignments: OutputDefaults.Default,
         AtemConfig: new AtemConfig(Enabled: false, Ip: string.Empty, Mappings: []),
         PicoNetwork: null,
         MultiviewGrid: null,

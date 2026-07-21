@@ -2,44 +2,45 @@ using System.Windows;
 using System.Windows.Interop;
 using Switcher.App.Configuration;
 using Switcher.Contracts;
-using Switcher.VirtualCam;
-using Switcher.VirtualCam.Display;
 
 namespace Switcher.App;
 
 /// <summary>
 /// Sub-operator source projector: a borderless, topmost, full-screen window mirroring whichever PGM
-/// bus the operator assigned to the HDMI output sink (docs/specs/pc-switcher-app.md §2.3/§5). Presents
-/// via <see cref="IHdmiFullscreenOutput"/>, attaching this window's native HWND to it on
-/// <see cref="OnSourceInitialized"/> - <see cref="FramePumpService"/>'s <c>OutputRouter.RouteFrame</c>
-/// call then drives <see cref="IHdmiFullscreenOutput.Present"/> directly, so this window has no frame
-/// handling of its own beyond owning the window/monitor placement and mouse-cursor policy
-/// (docs/tasks/agent-A2-006-app-integration-v2.md step 5).
+/// bus the operator assigned to the HDMI output sink (docs/specs/pc-switcher-app.md §2.3/§5). Since the
+/// libobs migration the native engine renders directly into this window's HWND via
+/// <see cref="IVideoEngine.StartDisplayOutput"/>, so this window only owns the window/monitor placement
+/// and mouse-cursor policy - it does no frame handling of its own.
 /// </summary>
 public partial class ProjectorWindow : Window
 {
-    private readonly IHdmiFullscreenOutput _hdmiOutput;
-    private readonly OutputRouter _outputRouter;
+    private readonly IVideoEngine _engine;
     private readonly AppConfig _config;
+    private string? _startedTarget;
 
-    public ProjectorWindow(IHdmiFullscreenOutput hdmiOutput, OutputRouter outputRouter, AppConfig config)
+    public ProjectorWindow(IVideoEngine engine, AppConfig config)
     {
         InitializeComponent();
-        _hdmiOutput = hdmiOutput;
-        _outputRouter = outputRouter;
+        _engine = engine;
         _config = config;
 
         SourceInitialized += OnSourceInitialized;
-        Closed += (_, _) => _hdmiOutput.Detach();
+        Closed += (_, _) =>
+        {
+            if (_startedTarget is { } target)
+            {
+                _engine.StopDisplayOutput(target);
+            }
+        };
     }
 
     /// <summary>Positions this window full-screen on the display currently assigned to the HDMI output
     /// sink (falling back to <see cref="AppConfig.ProjectorDisplayIndex"/> if none has been configured
-    /// yet) and shows it. The actual DXGI attach happens once the native HWND exists, in
+    /// yet) and shows it. The native display attach happens once the HWND exists, in
     /// <see cref="OnSourceInitialized"/>.</summary>
     public void ShowOnConfiguredDisplay()
     {
-        var assignment = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
+        var assignment = _engine.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
         var displayIndex = assignment?.DisplayId ?? _config.ProjectorDisplayIndex;
 
         var screens = System.Windows.Forms.Screen.AllScreens;
@@ -57,12 +58,12 @@ public partial class ProjectorWindow : Window
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        var assignment = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
+        var assignment = _engine.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
         var displayIndex = assignment?.DisplayId ?? _config.ProjectorDisplayIndex;
-        var hideCursor = assignment?.HideCursor ?? true;
-        var fullscreen = assignment?.Fullscreen ?? true;
+        var target = assignment?.Source == OutputSource.Pgm2 ? "PGM2" : "PGM1";
 
         var hwnd = new WindowInteropHelper(this).Handle;
-        _hdmiOutput.Attach(displayIndex, hwnd, hideCursor, fullscreen);
+        _engine.StartDisplayOutput(target, hwnd, displayIndex);
+        _startedTarget = target;
     }
 }

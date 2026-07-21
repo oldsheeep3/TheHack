@@ -1,32 +1,23 @@
 using Microsoft.Extensions.Logging;
 using Switcher.Contracts;
-using Switcher.Media;
-using Switcher.VirtualCam;
-using Switcher.VirtualCam.Ndi;
 
 namespace Switcher.App.Services;
 
 /// <summary>
-/// Pulls the composited PGM1/PGM2/PVW1/PVW2 frames off <see cref="CompositorEngine"/> on a fixed
-/// interval, routes the two PGM frames to whichever sinks <see cref="OutputRouter"/> currently assigns
-/// them to (VCAM1/VCAM2/HDMI), and caches the latest frame for every 4x4-multiview cell token
-/// (<c>PGM1</c>/<c>PGM2</c>/<c>PVW1</c>/<c>PVW2</c>/<c>SRC:&lt;id&gt;</c>) so the UI can render whatever
-/// layout is currently configured (docs/specs/pc-switcher-app.md §2.2-§2.3). Runs on a background loop,
-/// not the WPF dispatcher thread, so a slow GPU readback never blocks the UI; subscribers are
-/// responsible for marshalling back to their own thread (e.g. via <c>Dispatcher.BeginInvoke</c>). A
-/// failure rendering/routing one bus never stops the other bus's tick (docs/specs/00-system-overview.md
-/// §5: 1つの障害が全体を止めない).
+/// Reads the composited PGM1/PGM2/PVW1/PVW2 frames and each source's frame off the <see cref="IVideoEngine"/>
+/// on a fixed interval and caches the latest frame per 4x4-multiview cell token (<c>PGM1</c>/<c>PGM2</c>/
+/// <c>PVW1</c>/<c>PVW2</c>/<c>SRC:&lt;id&gt;</c>) so the UI can render whatever layout is configured
+/// (docs/specs/pc-switcher-app.md §2.2-§2.3). Since the libobs migration, output routing (VCAM/NDI/HDMI)
+/// is owned by the engine itself - this pump is UI preview only. Runs on a background loop, not the WPF
+/// dispatcher thread, so a slow readback never blocks the UI; subscribers marshal back to their own
+/// thread. A failure reading one target never stops the others (docs/specs/00-system-overview.md §5).
 /// </summary>
 public sealed class FramePumpService : IAsyncDisposable
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMilliseconds(1000.0 / 30);
     private static readonly ProgramBus[] Buses = [ProgramBus.Pgm1, ProgramBus.Pgm2];
 
-    private readonly CompositorEngine _compositor;
-    private readonly InputSourceManager _sourceManager;
-    private readonly IDualVirtualCameraOutput _virtualCameraOutput;
-    private readonly IDualNdiOutput _ndiOutput;
-    private readonly OutputRouter _outputRouter;
+    private readonly IVideoEngine _engine;
     private readonly ILogger<FramePumpService> _logger;
 
     private readonly object _cellFramesLock = new();
@@ -35,19 +26,9 @@ public sealed class FramePumpService : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
 
-    public FramePumpService(
-        CompositorEngine compositor,
-        InputSourceManager sourceManager,
-        IDualVirtualCameraOutput virtualCameraOutput,
-        IDualNdiOutput ndiOutput,
-        OutputRouter outputRouter,
-        ILogger<FramePumpService> logger)
+    public FramePumpService(IVideoEngine engine, ILogger<FramePumpService> logger)
     {
-        _compositor = compositor;
-        _sourceManager = sourceManager;
-        _virtualCameraOutput = virtualCameraOutput;
-        _ndiOutput = ndiOutput;
-        _outputRouter = outputRouter;
+        _engine = engine;
         _logger = logger;
     }
 
@@ -66,8 +47,6 @@ public sealed class FramePumpService : IAsyncDisposable
             return;
         }
 
-        _virtualCameraOutput.Start();
-        _ndiOutput.Start();
         _cts = new CancellationTokenSource();
         _loopTask = RunLoopAsync(_cts.Token);
     }
@@ -94,16 +73,14 @@ public sealed class FramePumpService : IAsyncDisposable
         }
         finally
         {
-            _virtualCameraOutput.Stop();
-            _ndiOutput.Stop();
             _cts.Dispose();
             _cts = null;
             _loopTask = null;
         }
     }
 
-    /// <summary>The most recently rendered frame for one multiview cell token (<c>PGM1</c>/<c>PGM2</c>/
-    /// <c>PVW1</c>/<c>PVW2</c>/<c>SRC:&lt;id&gt;</c>), or <c>null</c> if none has been rendered yet.</summary>
+    /// <summary>The most recently read frame for one multiview cell token (<c>PGM1</c>/<c>PGM2</c>/
+    /// <c>PVW1</c>/<c>PVW2</c>/<c>SRC:&lt;id&gt;</c>), or <c>null</c> if none has been read yet.</summary>
     public FrameData? TryGetCellFrame(string token)
     {
         lock (_cellFramesLock)
@@ -120,8 +97,7 @@ public sealed class FramePumpService : IAsyncDisposable
         {
             foreach (var bus in Buses)
             {
-                PumpProgram(bus);
-                PumpPreview(bus);
+                PumpBus(bus);
             }
 
             PumpSourceCells();
@@ -130,40 +106,29 @@ public sealed class FramePumpService : IAsyncDisposable
         }
     }
 
-    private void PumpProgram(ProgramBus bus)
+    private void PumpBus(ProgramBus bus)
     {
         try
         {
-            var frame = _compositor.GetProgramFrame(bus);
-            SetCellFrame(BusToken(bus, isProgram: true), frame);
-            ProgramFrameReady?.Invoke(this, (bus, frame));
-            _outputRouter.RouteFrame(bus == ProgramBus.Pgm1 ? OutputSource.Pgm1 : OutputSource.Pgm2, frame);
-        }
-        catch (Exception ex)
-        {
-            // Rendering depends on a Direct3D 11 runtime (see Switcher.Media/README.md); routing
-            // depends on the output sinks currently attached. Neither may take the pump loop down.
-            _logger.LogWarning(ex, "Program frame pump tick failed for {Bus}; will retry next interval.", bus);
-        }
-    }
+            var program = _engine.GetFrame(BusToken(bus, isProgram: true));
+            SetCellFrame(BusToken(bus, isProgram: true), program);
+            ProgramFrameReady?.Invoke(this, (bus, program));
 
-    private void PumpPreview(ProgramBus bus)
-    {
-        try
-        {
-            var frame = _compositor.GetPreviewFrame(bus);
-            SetCellFrame(BusToken(bus, isProgram: false), frame);
-            PreviewFrameReady?.Invoke(this, (bus, frame));
+            var preview = _engine.GetFrame(BusToken(bus, isProgram: false));
+            SetCellFrame(BusToken(bus, isProgram: false), preview);
+            PreviewFrameReady?.Invoke(this, (bus, preview));
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Preview frame pump tick failed for {Bus}; will retry next interval.", bus);
+            // Readback depends on the engine's render pipeline; a transient failure must not take the
+            // pump loop down (it retries next interval).
+            _logger.LogWarning(ex, "Frame pump tick failed for {Bus}; will retry next interval.", bus);
         }
     }
 
     private void PumpSourceCells()
     {
-        foreach (var source in _sourceManager.GetSources())
+        foreach (var source in _engine.GetSources())
         {
             if (source.Id is not { } id)
             {
@@ -172,10 +137,7 @@ public sealed class FramePumpService : IAsyncDisposable
 
             try
             {
-                if (_sourceManager.TryGetLatestFrame(source.Channel, out var frame) && frame is not null)
-                {
-                    SetCellFrame($"SRC:{id}", frame);
-                }
+                SetCellFrame($"SRC:{id}", _engine.GetFrame($"SRC:{id}"));
             }
             catch (Exception ex)
             {

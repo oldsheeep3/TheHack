@@ -15,13 +15,13 @@ internal static class WebHostServices
     public static void Configure(
         IServiceCollection services,
         ISwitcherConfigService configService,
-        IInputSourceManager sourceManager,
+        IVideoEngine videoEngine,
         IControllerInputSink inputSink,
         IDeviceQueryService deviceQueryService)
     {
         services.AddLogging();
         services.AddSingleton(configService);
-        services.AddSingleton(sourceManager);
+        services.AddSingleton(videoEngine);
         services.AddSingleton(inputSink);
         services.AddSingleton(deviceQueryService);
         services.AddSingleton<ControllerInputQueue>();

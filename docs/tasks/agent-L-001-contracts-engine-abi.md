@@ -1,6 +1,6 @@
 ---
 name: agent-L-001-contracts-engine-abi
-status: planning
+status: done
 pid: 
 agent_cli: opus
 ---

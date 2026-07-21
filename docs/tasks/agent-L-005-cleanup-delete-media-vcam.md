@@ -1,6 +1,6 @@
 ---
 name: agent-L-005-cleanup-delete-media-vcam
-status: planning
+status: done
 pid: 
 agent_cli: sonnet
 ---
