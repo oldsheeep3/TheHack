@@ -30,4 +30,29 @@
     </None>
   </ItemGroup>
 
+  <!--
+    Deploy the native libobs engine (switcher-engine.dll) next to the app so DllImport("switcher-engine")
+    resolves at runtime, including under Visual Studio F5 / Rebuild. The DLL is a separate CMake build
+    (native\switcher-engine\build.bat, Windows + OBS only). This copy is best-effort: it prefers the
+    build matching the current $(Configuration), falls back to a Release native build, and silently
+    no-ops (just a message) when no native build exists - so the managed build stays green on Linux/CI
+    where libobs cannot link. obs.dll (libobs) itself must still be on PATH at runtime (see README /
+    launchSettings.json).
+  -->
+  <Target Name="CopyNativeSwitcherEngine" AfterTargets="Build">
+    <PropertyGroup>
+      <_NativeEngineBuild>$(MSBuildThisFileDirectory)..\..\native\switcher-engine\build</_NativeEngineBuild>
+      <_NativeEngineDll Condition="Exists('$(_NativeEngineBuild)\$(Configuration)\switcher-engine.dll')">$(_NativeEngineBuild)\$(Configuration)\switcher-engine.dll</_NativeEngineDll>
+      <_NativeEngineDll Condition="'$(_NativeEngineDll)' == '' And Exists('$(_NativeEngineBuild)\Release\switcher-engine.dll')">$(_NativeEngineBuild)\Release\switcher-engine.dll</_NativeEngineDll>
+    </PropertyGroup>
+    <Copy Condition="'$(_NativeEngineDll)' != ''"
+          SourceFiles="$(_NativeEngineDll)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+    <Message Condition="'$(_NativeEngineDll)' != ''" Importance="high"
+             Text="Copied native engine: $(_NativeEngineDll) -> $(OutDir)" />
+    <Message Condition="'$(_NativeEngineDll)' == ''" Importance="high"
+             Text="switcher-engine.dll not found under $(_NativeEngineBuild); build it via native\switcher-engine\build.bat (Windows + OBS). The app will fail at engine start (0x8007007E) without it." />
+  </Target>
+
 </Project>
