@@ -36,8 +36,7 @@ if "%CONFIG%"=="" set CONFIG=Release
 
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%build
-rem App output: <repo>\src\Switcher.App\bin\<CONFIG>\net9.0-windows
-set APP_OUT=%SCRIPT_DIR%..\..\src\Switcher.App\bin\%CONFIG%\net9.0-windows
+set APP_BIN=%SCRIPT_DIR%..\..\src\Switcher.App\bin
 
 echo(
 echo === switcher-engine build (%CONFIG%, x64) ===
@@ -91,9 +90,17 @@ if not exist "%DLL%" (
     exit /b 1
 )
 
+rem --- locate the app output dynamically -------------------------------------
+rem The .NET output folder for this CONFIG may or may not include an x64/x86 platform
+rem segment (e.g. bin\Release\net9.0-windows vs bin\x64\Release\net9.0-windows) depending
+rem on how `dotnet build` was invoked - a VS "x64 Native Tools" prompt exports Platform=x64,
+rem which MSBuild honors. Find the built Switcher.App.dll for this CONFIG and copy next to it.
+set APP_OUT=
+for /f "delims=" %%F in ('dir /s /b "%APP_BIN%\Switcher.App.dll" 2^>nul ^| findstr /i "\\%CONFIG%\\net9.0-windows\\"') do set APP_OUT=%%~dpF
+
 rem --- deploy next to the app ------------------------------------------------
-if not exist "%APP_OUT%" (
-    echo NOTE: app output not found yet: %APP_OUT%
+if "%APP_OUT%"=="" (
+    echo NOTE: no %CONFIG% Switcher.App build found under %APP_BIN%.
     echo       build Switcher.App ^(dotnet build -c %CONFIG%^) then re-run, or copy manually.
 ) else (
     echo(
