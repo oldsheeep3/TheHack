@@ -18,6 +18,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdarg>
 #include <cstdint>
@@ -42,7 +43,6 @@ struct Tap {
     video_t *video = nullptr;       // borrowed (bus/mv view) or owned via `owned_view`
     obs_view_t *owned_view = nullptr;  // non-null only for lazily-created SRC:<id> taps
     bool connected = false;
-    uint64_t last_ns = 0;
     std::string target;
 };
 
@@ -60,9 +60,14 @@ struct DisplayOut {
 };
 
 // Per-tap trampoline arg: the video_output_connect callback identifies its engine + target through this.
+// All fields the raw-video trampoline touches live here (not in ctx->taps) so the trampoline can run
+// lock-free - it never takes ctx->lock, which is what lets disconnect run *outside* the lock without a
+// lock-order inversion against libobs' video-output mutex.
 struct TapCbArg {
-    engine_ctx *ctx;
+    engine_ctx *ctx = nullptr;
     std::string target;
+    std::atomic<uint64_t> last_ns{0};  // throttle clock, trampoline-owned
+    std::atomic<bool> active{false};   // gate: cleared before disconnect so no callback touches stale state
 };
 
 struct Bus {
@@ -95,8 +100,8 @@ struct engine_ctx {
     std::map<std::string, OutputSink> outputs;     // keyed by sink token (VCAM1/NDI1/...)
     std::map<std::string, DisplayOut> displays;    // keyed by target token
 
-    engine_frame_cb frame_cb = nullptr;
-    void *frame_user = nullptr;
+    std::atomic<engine_frame_cb> frame_cb{nullptr};  // read lock-free by the raw-video trampoline
+    std::atomic<void *> frame_user{nullptr};
     engine_state_cb state_cb = nullptr;
     void *state_user = nullptr;
 
@@ -306,28 +311,25 @@ obs_source_t *resolve_target_source(engine_ctx *ctx, const std::string &target) 
     return nullptr;
 }
 
+// Runs on the libobs video thread. Lock-free by construction: it reads only the arg's own atomics and
+// ctx fields that are immutable after startup (canvas_w/h) or atomic (frame_cb/frame_user). It must not
+// take ctx->lock, or teardown/tap-toggle (which disconnect while historically holding ctx->lock) would
+// invert lock order against the video-output mutex libobs holds while dispatching here.
 void on_raw_video_trampoline(void *param, struct video_data *frame) {
     auto *arg = static_cast<TapCbArg *>(param);
-    engine_ctx *ctx = arg->ctx;
     if (!frame || !frame->data[0]) return;
+    if (!arg->active.load(std::memory_order_acquire)) return;
 
-    engine_frame_cb cb;
-    void *user;
-    uint32_t w, h;
-    {
-        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-        auto it = ctx->taps.find(arg->target);
-        if (it == ctx->taps.end() || !it->second.connected) return;
-        if (frame->timestamp - it->second.last_ns < kTapMinIntervalNs && it->second.last_ns != 0) return;
-        it->second.last_ns = frame->timestamp;
-        cb = ctx->frame_cb;
-        user = ctx->frame_user;
-        w = ctx->canvas_w;
-        h = ctx->canvas_h;
-    }
+    const uint64_t last = arg->last_ns.load(std::memory_order_relaxed);
+    if (last != 0 && frame->timestamp - last < kTapMinIntervalNs) return;
+    arg->last_ns.store(frame->timestamp, std::memory_order_relaxed);
+
+    engine_ctx *ctx = arg->ctx;
+    engine_frame_cb cb = ctx->frame_cb.load(std::memory_order_acquire);
+    void *user = ctx->frame_user.load(std::memory_order_acquire);
     if (!cb) return;
-    cb(user, arg->target.c_str(), frame->data[0], static_cast<int>(w), static_cast<int>(h),
-       static_cast<int>(frame->linesize[0]));
+    cb(user, arg->target.c_str(), frame->data[0], static_cast<int>(ctx->canvas_w),
+       static_cast<int>(ctx->canvas_h), static_cast<int>(frame->linesize[0]));
 }
 }  // namespace
 
@@ -385,6 +387,9 @@ engine_ctx *engine_startup(const char *options_json) {
 
     if (!obs_startup("en-US", nullptr, nullptr)) {
         obs_data_release(opt);
+        base_set_log_handler(nullptr, nullptr);
+        g_log_file = nullptr;
+        if (ctx->log_file) std::fclose(ctx->log_file);
         delete ctx;
         return nullptr;
     }
@@ -408,6 +413,8 @@ engine_ctx *engine_startup(const char *options_json) {
     if (obs_reset_video(&ovi) != OBS_VIDEO_SUCCESS) {
         obs_data_release(opt);
         obs_shutdown();
+        base_set_log_handler(nullptr, nullptr);
+        g_log_file = nullptr;
         if (ctx->log_file) std::fclose(ctx->log_file);
         delete ctx;
         return nullptr;
@@ -459,26 +466,37 @@ engine_ctx *engine_startup(const char *options_json) {
 
 void engine_shutdown(engine_ctx *ctx) {
     if (!ctx) return;
+
+    // Phase 1: stop readback. Snapshot each tap's (video, arg, owned_view) under the lock and clear the
+    // active gate, then release the lock and do the actual video_output_disconnect OUTSIDE it. disconnect
+    // is synchronous (libobs holds its video-output mutex until any in-flight trampoline returns), so once
+    // it returns no callback can touch the arg - only then is it safe to destroy the owned view its video
+    // belongs to and free the arg. Running disconnect under ctx->lock would invert lock order (see ①).
+    struct TapTeardown { video_t *video; TapCbArg *arg; obs_view_t *owned_view; };
+    std::vector<TapTeardown> teardown;
     {
         std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-
-        // Stop readback before tearing down views (callbacks reference ctx->taps).
         for (auto &[target, tap] : ctx->taps) {
-            if (tap.connected && tap.video) {
-                auto ait = ctx->tap_args.find(target);
-                if (ait != ctx->tap_args.end()) {
-                    video_output_disconnect(tap.video, on_raw_video_trampoline, ait->second);
-                }
-            }
-            if (tap.owned_view) {
-                obs_view_set_source(tap.owned_view, 0, nullptr);
-                obs_view_remove(tap.owned_view);
-                obs_view_destroy(tap.owned_view);
-            }
+            auto ait = ctx->tap_args.find(target);
+            TapCbArg *arg = (ait != ctx->tap_args.end()) ? ait->second : nullptr;
+            if (arg) arg->active.store(false, std::memory_order_release);
+            teardown.push_back({tap.connected ? tap.video : nullptr, arg, tap.owned_view});
         }
         ctx->taps.clear();
-        for (auto &[target, arg] : ctx->tap_args) delete arg;
         ctx->tap_args.clear();
+    }
+    for (auto &t : teardown) {
+        if (t.video && t.arg) video_output_disconnect(t.video, on_raw_video_trampoline, t.arg);
+        if (t.owned_view) {
+            obs_view_set_source(t.owned_view, 0, nullptr);
+            obs_view_remove(t.owned_view);
+            obs_view_destroy(t.owned_view);
+        }
+        delete t.arg;
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
 
         // Stop + release outputs.
         for (auto &[sink, out] : ctx->outputs) {
@@ -564,31 +582,42 @@ int engine_add_source(engine_ctx *ctx, const char *id, const char *type, const c
 
 int engine_remove_source(engine_ctx *ctx, const char *id) {
     if (!ctx || !id) return 1;
-    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
 
-    // Drop any SRC:<id> tap that referenced it.
+    // Drop any SRC:<id> tap that referenced it. Snapshot the disconnect under the lock (clearing the gate
+    // and unhooking the maps so nothing else finds it), then disconnect + tear down the owned view + free
+    // the arg OUTSIDE the lock - same lock-order/UAF discipline as engine_shutdown (see ①).
     const std::string tap_key = std::string("SRC:") + id;
-    auto tit = ctx->taps.find(tap_key);
-    if (tit != ctx->taps.end()) {
-        if (tit->second.connected && tit->second.video) {
+    video_t *disconnect_video = nullptr;
+    obs_view_t *owned_view = nullptr;
+    TapCbArg *arg = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+
+        auto tit = ctx->taps.find(tap_key);
+        if (tit != ctx->taps.end()) {
             auto ait = ctx->tap_args.find(tap_key);
-            if (ait != ctx->tap_args.end())
-                video_output_disconnect(tit->second.video, on_raw_video_trampoline, ait->second);
+            if (ait != ctx->tap_args.end()) arg = ait->second;
+            if (arg) arg->active.store(false, std::memory_order_release);
+            if (tit->second.connected) disconnect_video = tit->second.video;
+            owned_view = tit->second.owned_view;
+            ctx->taps.erase(tit);
+            if (ait != ctx->tap_args.end()) ctx->tap_args.erase(ait);
         }
-        if (tit->second.owned_view) {
-            obs_view_set_source(tit->second.owned_view, 0, nullptr);
-            obs_view_remove(tit->second.owned_view);
-            obs_view_destroy(tit->second.owned_view);
+
+        auto it = ctx->sources.find(id);
+        if (it != ctx->sources.end()) {
+            obs_source_release(it->second);  // scene items that still reference it keep it alive until removed
+            ctx->sources.erase(it);
         }
-        ctx->taps.erase(tit);
-        auto ait = ctx->tap_args.find(tap_key);
-        if (ait != ctx->tap_args.end()) { delete ait->second; ctx->tap_args.erase(ait); }
     }
 
-    auto it = ctx->sources.find(id);
-    if (it == ctx->sources.end()) return 0;
-    obs_source_release(it->second);  // scene items that still reference it keep it alive until removed
-    ctx->sources.erase(it);
+    if (disconnect_video && arg) video_output_disconnect(disconnect_video, on_raw_video_trampoline, arg);
+    if (owned_view) {
+        obs_view_set_source(owned_view, 0, nullptr);
+        obs_view_remove(owned_view);
+        obs_view_destroy(owned_view);
+    }
+    delete arg;
     return 0;
 }
 
@@ -599,14 +628,24 @@ int engine_remove_source(engine_ctx *ctx, const char *id) {
 static void emit_state(engine_ctx *ctx) {
     engine_state_cb cb = ctx->state_cb;
     if (!cb) return;
-    char buf[512];
-    std::snprintf(buf, sizeof(buf),
-                  "{\"buses\":["
-                  "{\"bus\":0,\"program_id\":\"%s\",\"preview_id\":\"%s\"},"
-                  "{\"bus\":1,\"program_id\":\"%s\",\"preview_id\":\"%s\"}]}",
-                  ctx->buses[0].program_id.c_str(), ctx->buses[0].preview_id.c_str(),
-                  ctx->buses[1].program_id.c_str(), ctx->buses[1].preview_id.c_str());
-    cb(ctx->state_user, buf);
+    // Build with obs_data so source ids are JSON-escaped and the payload is variable-length: a raw
+    // snprintf into a fixed buffer would corrupt state_json for ids containing " / \ / control chars or
+    // longer than the buffer, breaking the managed OnStateChanged parse (③).
+    obs_data_t *root = obs_data_create();
+    obs_data_array_t *buses = obs_data_array_create();
+    for (int i = 0; i < kBusCount; ++i) {
+        obs_data_t *b = obs_data_create();
+        obs_data_set_int(b, "bus", i);
+        obs_data_set_string(b, "program_id", ctx->buses[i].program_id.c_str());
+        obs_data_set_string(b, "preview_id", ctx->buses[i].preview_id.c_str());
+        obs_data_array_push_back(buses, b);
+        obs_data_release(b);
+    }
+    obs_data_set_array(root, "buses", buses);
+    const char *json = obs_data_get_json(root);  // owned by root, valid until release (i.e. during cb)
+    if (json) cb(ctx->state_user, json);
+    obs_data_array_release(buses);
+    obs_data_release(root);
 }
 
 void engine_set_preview(engine_ctx *ctx, int bus, const char *source_id) {
@@ -941,51 +980,67 @@ void engine_stop_display(engine_ctx *ctx, const char *target) {
 
 void engine_set_tap(engine_ctx *ctx, const char *target, int enabled) {
     if (!ctx || !target) return;
-    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
     const std::string key = target;
 
-    if (enabled) {
-        video_t *video = resolve_target_video(ctx, key);
-        if (!video) return;
-        Tap &tap = ctx->taps[key];
-        tap.target = key;
-        tap.video = video;
-        if (tap.connected) return;
+    // Decide the connect/disconnect under the lock, then perform it OUTSIDE the lock. The trampoline is
+    // lock-free; keeping video_output_connect/disconnect off ctx->lock avoids inverting lock order against
+    // libobs' video-output mutex (see ①). The arg is reused across enable/disable cycles (kept in
+    // tap_args) and only freed on remove_source/shutdown, so it stays valid for any late disconnect here.
+    video_t *connect_video = nullptr;
+    video_t *disconnect_video = nullptr;
+    TapCbArg *arg = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+        if (enabled) {
+            video_t *video = resolve_target_video(ctx, key);
+            if (!video) return;
+            Tap &tap = ctx->taps[key];
+            tap.target = key;
+            tap.video = video;
+            if (tap.connected) return;
 
-        // One trampoline arg per target, kept alive for the connection's lifetime.
-        TapCbArg *arg;
-        auto ait = ctx->tap_args.find(key);
-        if (ait == ctx->tap_args.end()) {
-            arg = new TapCbArg{ctx, key};
-            ctx->tap_args[key] = arg;
+            // One trampoline arg per target, kept alive for the connection's lifetime.
+            auto ait = ctx->tap_args.find(key);
+            if (ait == ctx->tap_args.end()) {
+                arg = new TapCbArg{ctx, key};
+                ctx->tap_args[key] = arg;
+            } else {
+                arg = ait->second;
+            }
+            arg->last_ns.store(0, std::memory_order_relaxed);
+            arg->active.store(true, std::memory_order_release);  // gate open before connect
+            tap.connected = true;
+            connect_video = video;
         } else {
-            arg = ait->second;
+            auto it = ctx->taps.find(key);
+            if (it == ctx->taps.end() || !it->second.connected) return;
+            auto ait = ctx->tap_args.find(key);
+            if (ait != ctx->tap_args.end()) arg = ait->second;
+            if (arg) arg->active.store(false, std::memory_order_release);  // gate shut before disconnect
+            disconnect_video = it->second.video;
+            it->second.connected = false;
         }
+    }
 
+    if (connect_video && arg) {
         struct video_scale_info conv = {};
         conv.format = VIDEO_FORMAT_BGRA;  // already BGRA canvas -> no color conversion
         conv.width = ctx->canvas_w;
         conv.height = ctx->canvas_h;
         conv.range = VIDEO_RANGE_FULL;
         conv.colorspace = VIDEO_CS_709;
-        video_output_connect(video, &conv, on_raw_video_trampoline, arg);
-        tap.connected = true;
-    } else {
-        auto it = ctx->taps.find(key);
-        if (it == ctx->taps.end() || !it->second.connected) return;
-        auto ait = ctx->tap_args.find(key);
-        if (ait != ctx->tap_args.end() && it->second.video) {
-            video_output_disconnect(it->second.video, on_raw_video_trampoline, ait->second);
-        }
-        it->second.connected = false;
+        video_output_connect(connect_video, &conv, on_raw_video_trampoline, arg);
+    }
+    if (disconnect_video && arg) {
+        video_output_disconnect(disconnect_video, on_raw_video_trampoline, arg);
     }
 }
 
 void engine_set_frame_cb(engine_ctx *ctx, engine_frame_cb cb, void *user) {
     if (!ctx) return;
-    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-    ctx->frame_cb = cb;
-    ctx->frame_user = user;
+    // Stored atomically so the lock-free trampoline reads a consistent cb/user without ctx->lock.
+    ctx->frame_user.store(user, std::memory_order_release);
+    ctx->frame_cb.store(cb, std::memory_order_release);
 }
 
 void engine_set_state_cb(engine_ctx *ctx, engine_state_cb cb, void *user) {
