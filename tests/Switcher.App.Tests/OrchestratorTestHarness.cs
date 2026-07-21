@@ -4,20 +4,17 @@ using Switcher.App.Configuration;
 using Switcher.App.Orchestration;
 using Switcher.Atem;
 using Switcher.Contracts;
+using Switcher.Engine;
 using Switcher.Hid;
-using Switcher.Media;
-using Switcher.VirtualCam;
 
 namespace Switcher.App.Tests;
 
 /// <summary>
-/// Builds a real <see cref="AppOrchestrator"/> wired to real (but never-started/never-network-connected)
-/// module instances - the same shape <see cref="Composition.ServiceCollectionExtensions"/> assembles in
-/// production - so tests exercise the actual integration wiring rather than a hand-rolled substitute.
-/// The only fake is <see cref="FakeTallyBroadcaster"/> (avoids a real UDP broadcast socket per test).
-/// <see cref="InputSourceManager"/>'s background GStreamer pipeline threads never block source
-/// registration (channel/id allocation happens synchronously before the thread starts) so they don't
-/// affect assertions; <see cref="Dispose"/> cancels/joins them.
+/// Builds a real <see cref="AppOrchestrator"/> wired to a <see cref="FakeVideoEngine"/> (the same
+/// <see cref="IVideoEngine"/> seam <see cref="Composition.ServiceCollectionExtensions"/> assembles in
+/// production, minus the native libobs backend) plus the other real module instances, so tests exercise
+/// the actual orchestration wiring rather than a hand-rolled substitute. The only other fake is
+/// <see cref="FakeTallyBroadcaster"/> (avoids a real UDP broadcast socket per test).
 /// </summary>
 internal sealed class OrchestratorTestHarness : IDisposable
 {
@@ -27,12 +24,9 @@ internal sealed class OrchestratorTestHarness : IDisposable
     {
         Config = config ?? AppConfig.CreateDefault();
 
-        SourceManager = new InputSourceManager(NullLoggerFactory.Instance);
-        Compositor = new CompositorEngine(SourceManager);
+        Engine = new FakeVideoEngine();
         AtemController = new AtemController(ButtonCommandMapping.Empty, NullLogger<AtemController>.Instance);
         TallyBroadcaster = new FakeTallyBroadcaster();
-        VirtualCameraOutput = new DualVirtualCameraOutput();
-        OutputRouter = new OutputRouter(VirtualCameraOutput);
         HidBacklightService = new HidBacklightService();
 
         _runtimeConfigDir = Path.Combine(Path.GetTempPath(), $"switcher-app-tests-{Guid.NewGuid():N}");
@@ -40,11 +34,9 @@ internal sealed class OrchestratorTestHarness : IDisposable
         RuntimeConfigStore = new RuntimeConfigStore(_runtimeConfigDir, NullLogger.Instance);
 
         Orchestrator = new AppOrchestrator(
-            SourceManager,
-            Compositor,
+            Engine,
             AtemController,
             TallyBroadcaster,
-            OutputRouter,
             HidBacklightService,
             RuntimeConfigStore,
             Config,
@@ -53,17 +45,11 @@ internal sealed class OrchestratorTestHarness : IDisposable
 
     public AppConfig Config { get; }
 
-    public InputSourceManager SourceManager { get; }
-
-    public CompositorEngine Compositor { get; }
+    public FakeVideoEngine Engine { get; }
 
     public AtemController AtemController { get; }
 
     public FakeTallyBroadcaster TallyBroadcaster { get; }
-
-    public DualVirtualCameraOutput VirtualCameraOutput { get; }
-
-    public OutputRouter OutputRouter { get; }
 
     public HidBacklightService HidBacklightService { get; }
 
@@ -71,22 +57,17 @@ internal sealed class OrchestratorTestHarness : IDisposable
 
     public AppOrchestrator Orchestrator { get; }
 
-    /// <summary>Registers a v2 (id-based) source and returns its allocated channel. Registration
-    /// (id/channel bookkeeping) is synchronous; the underlying capture pipeline connects (or fails and
-    /// retries) on its own background thread and never blocks this call.</summary>
+    /// <summary>Registers a v2 (id-based) source and returns its allocated channel.</summary>
     public int AddTestSource(string id)
     {
-        SourceManager.AddSource(new SourceDefinition(id, id, SourceType.Webcam, null, new WebcamConfig("fake-device", null), null));
-        SourceManager.TryResolveChannel(id, out var channel);
+        Engine.AddSource(new SourceDefinition(id, id, SourceType.Webcam, null, new WebcamConfig("fake-device", null), null));
+        Engine.TryResolveChannel(id, out var channel);
         return channel;
     }
 
     public void Dispose()
     {
-        SourceManager.Dispose();
-        Compositor.Dispose();
         AtemController.Dispose();
-        VirtualCameraOutput.Dispose();
         HidBacklightService.Dispose();
 
         try

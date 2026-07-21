@@ -27,7 +27,7 @@ public sealed class EndToEndSmokeTests
 
         // Tally was broadcast as part of the TAKE above.
         Assert.NotEmpty(harness.TallyBroadcaster.PublishedV2);
-        harness.SourceManager.TryResolveChannel("cam-1", out var channel);
+        harness.Engine.TryResolveChannel("cam-1", out var channel);
         Assert.Contains(channel, harness.TallyBroadcaster.LastV2!.ActivePgm1);
 
         // Output assignment: route PGM1 to VCAM1 (already the default) and PGM2 to VCAM2.

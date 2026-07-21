@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
 using Switcher.Atem;
+using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Web;
 
@@ -19,6 +20,7 @@ namespace Switcher.App.Services;
 /// </summary>
 public sealed class AppHostService
 {
+    private readonly IVideoEngine _engine;
     private readonly WebHost _webHost;
     private readonly AtemController _atemController;
     private readonly HidInputService _hidInputService;
@@ -28,6 +30,7 @@ public sealed class AppHostService
     private readonly ILogger<AppHostService> _logger;
 
     public AppHostService(
+        IVideoEngine engine,
         WebHost webHost,
         AtemController atemController,
         HidInputService hidInputService,
@@ -36,6 +39,7 @@ public sealed class AppHostService
         AppConfig config,
         ILogger<AppHostService> logger)
     {
+        _engine = engine;
         _webHost = webHost;
         _atemController = atemController;
         _hidInputService = hidInputService;
@@ -47,7 +51,10 @@ public sealed class AppHostService
 
     public async Task StartAsync()
     {
-        _logger.LogInformation("Starting Switcher.App: connecting ATEM client to {AtemIp}.", _config.AtemIp);
+        _logger.LogInformation("Starting Switcher.App: booting video engine.");
+        await _engine.StartAsync(new EngineOptions()).ConfigureAwait(false);
+
+        _logger.LogInformation("Connecting ATEM client to {AtemIp}.", _config.AtemIp);
         _atemController.Connect(_config.AtemIp);
 
         try
@@ -80,5 +87,6 @@ public sealed class AppHostService
         _hidBacklightService.Stop();
         _hidInputService.Stop();
         _atemController.Dispose();
+        await _engine.StopAsync().ConfigureAwait(false);
     }
 }

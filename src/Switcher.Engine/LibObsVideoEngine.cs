@@ -169,9 +169,7 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
         NativeMethods.engine_take(_ctx, BusToInt(ProgramBus.Pgm1), 0, 0);
     }
 
-    public FrameData GetProgramFrame() => _lastFrameByTarget.TryGetValue("PGM1", out var f) ? f : Empty;
-
-    public FrameData GetPreviewFrame() => _lastFrameByTarget.TryGetValue("PVW1", out var f) ? f : Empty;
+    public FrameData GetFrame(string target) => _lastFrameByTarget.TryGetValue(target, out var f) ? f : Empty;
 
     public void ApplyMultiview(MultiviewLayout layout)
     {

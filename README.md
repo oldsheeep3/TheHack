@@ -30,7 +30,8 @@ PC上に常駐する制御アプリを「脳」とし、複数プロトコル（
 
 | コンポーネント | 場所 | 技術 | 責務 | 個別README / 仕様書 |
 | --- | --- | --- | --- | --- |
-| PC常駐アプリ | `src/` | C# / .NET 9 + GStreamer | 映像入力デコード・PiP合成・仮想カメラ/HDMI出力・WebAPI/WebSocket・UDPタリー送出・ATEM制御 | [App](src/Switcher.App/README.md) / [仕様](docs/specs/pc-switcher-app.md) |
+| PC常駐アプリ | `src/` | C# / .NET 9 + **libobs**(P/Invoke) | 映像入力デコード・PiP合成・仮想カメラ/HDMI出力・WebAPI/WebSocket・UDPタリー送出・ATEM制御 | [App](src/Switcher.App/README.md) / [仕様](docs/specs/pc-switcher-app.md) / [移行](docs/specs/libobs-engine-migration.md) |
+| ネイティブ映像エンジン | `native/switcher-engine/` | C/C++ + libobs (GPLv2) | libobs を駆動する `IVideoEngine` の実体（デュアルM/E=obs_view×2・ソース共有・出力・マルチビュー） | [switcher-engine](native/switcher-engine/README.md) |
 | Pico 2W コントローラー | `firmware/pico2w-controller/` | Pico SDK (C/C++) | 物理ボタン入力→PC/スマホ送信・モジュール統括・HDMI DDCタリー抽出 | [Firmware](firmware/pico2w-controller/README.md) / [仕様](docs/specs/pico2w-controller-firmware.md) |
 | スマホWebブリッジ | `apps/phone-bridge/` | React / TypeScript | Web Serial/WebUSBでPico 2Wを中継・ブラウザ設定UI | [phone-bridge](apps/phone-bridge/README.md) / [仕様](docs/specs/phone-web-bridge.md) |
 | ワイヤレスタリー子機 | (未着手) | ESP32 (Arduino/ESP-IDF) | UDPブロードキャスト受信→赤/緑LED点灯 | [仕様](docs/specs/wireless-tally.md) |
@@ -39,18 +40,20 @@ PC上に常駐する制御アプリを「脳」とし、複数プロトコル（
 
 | プロジェクト | 役割 |
 | --- | --- |
-| `Switcher.Contracts` | 共通インターフェース・DTO（各モジュールが依存する契約層） |
-| `Switcher.Media` | 多ソース入力管理（UVC/NDI/SRT）とGPU/PiPコンポジター |
+| `Switcher.Contracts` | 共通インターフェース・DTO（`IVideoEngine` 抽象を含む契約層） |
+| `Switcher.Engine` | `IVideoEngine` の実体。ネイティブ `switcher-engine`(libobs) への P/Invoke ＋ テスト用 `FakeVideoEngine` |
 | `Switcher.Atem` | ATEM遠隔制御クライアント（UDP 9910） |
-| `Switcher.VirtualCam` | 仮想カメラ出力・全画面物理ディスプレイ出力 |
 | `Switcher.Web` | WebAPI/WebSocketサーバ・UDPタリーブロードキャスト |
 | `Switcher.App` | WPFホスト。上記を1つの常駐プロセスに結線するDI合成ルート |
+
+> **libobs 移行**: 旧 `Switcher.Media`(GStreamer/DirectX 合成) / `Switcher.VirtualCam`(自作仮想カメラ) は廃止し、映像パスは libobs に一本化した（[`docs/specs/libobs-engine-migration.md`](docs/specs/libobs-engine-migration.md)）。ネイティブ `switcher-engine.dll` は Windows + OBS でのみビルド/実行し、`.sln` には含まない（テストは `FakeVideoEngine` 注入でヘッドレス実行）。
 
 ## リポジトリ構成
 
 ```text
 .
 ├── src/                       # PC常駐アプリ (.NET 9) — HybridSwitcher.sln
+├── native/switcher-engine/    # ネイティブ映像エンジン (C/C++ + libobs, CMake, .sln外)
 ├── tests/                     # 上記各プロジェクトのユニットテスト
 ├── apps/phone-bridge/         # スマホWebブリッジ & 設定UI (React/TS)
 ├── firmware/pico2w-controller/# Pico 2W コントローラー / タリー抽出ファーム

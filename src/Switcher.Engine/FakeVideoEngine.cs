@@ -145,9 +145,7 @@ public sealed class FakeVideoEngine : IVideoEngine
         // Global TAKE no-op in the fake.
     }
 
-    public FrameData GetProgramFrame() => EmptyFrame();
-
-    public FrameData GetPreviewFrame() => EmptyFrame();
+    public FrameData GetFrame(string target) => EmptyFrame();
 
     public void ApplyMultiview(MultiviewLayout layout) => ArgumentNullException.ThrowIfNull(layout);
 

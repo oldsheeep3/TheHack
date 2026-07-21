@@ -13,9 +13,6 @@ using Switcher.App.Services;
 using Switcher.App.ViewModels;
 using Switcher.Atem;
 using Switcher.Contracts;
-using Switcher.Media;
-using Switcher.VirtualCam;
-using Switcher.VirtualCam.Display;
 using Forms = System.Windows.Forms;
 
 namespace Switcher.App;
@@ -32,13 +29,9 @@ namespace Switcher.App;
 public partial class MainWindow : Window
 {
     private readonly AppOrchestrator _orchestrator;
-    private readonly IInputSourceManager _sourceManager;
+    private readonly IVideoEngine _engine;
     private readonly AtemController _atemController;
     private readonly FramePumpService _framePump;
-    private readonly OutputRouter _outputRouter;
-    private readonly IHdmiFullscreenOutput _hdmiOutput;
-    private readonly CompositorEngine _compositor;
-    private readonly IFullscreenPresenterFactory _presenterFactory;
     private readonly IDeviceQueryService _deviceQueryService;
     private readonly AppConfig _config;
     private readonly ILogger<MainWindow> _logger;
@@ -64,13 +57,9 @@ public partial class MainWindow : Window
 
     public MainWindow(
         AppOrchestrator orchestrator,
-        IInputSourceManager sourceManager,
+        IVideoEngine engine,
         AtemController atemController,
         FramePumpService framePump,
-        OutputRouter outputRouter,
-        IHdmiFullscreenOutput hdmiOutput,
-        CompositorEngine compositor,
-        IFullscreenPresenterFactory presenterFactory,
         IDeviceQueryService deviceQueryService,
         AppConfig config,
         ILogger<MainWindow> logger)
@@ -78,13 +67,9 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _orchestrator = orchestrator;
-        _sourceManager = sourceManager;
+        _engine = engine;
         _atemController = atemController;
         _framePump = framePump;
-        _outputRouter = outputRouter;
-        _hdmiOutput = hdmiOutput;
-        _compositor = compositor;
-        _presenterFactory = presenterFactory;
         _deviceQueryService = deviceQueryService;
         _config = config;
         _logger = logger;
@@ -100,7 +85,7 @@ public partial class MainWindow : Window
 
         RefreshDisplays();
 
-        foreach (var source in _sourceManager.GetSources())
+        foreach (var source in _engine.GetSources())
         {
             _tiles.Add(new SourceTileViewModel(source));
         }
@@ -111,7 +96,7 @@ public partial class MainWindow : Window
         foreach (var sink in new[] { OutputSink.Vcam1, OutputSink.Vcam2, OutputSink.Hdmi, OutputSink.Ndi1, OutputSink.Ndi2 })
         {
             var row = new OutputAssignmentRowViewModel(sink, _availableDisplays);
-            var current = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == sink);
+            var current = _engine.CurrentAssignments.FirstOrDefault(a => a.Sink == sink);
             if (current is not null)
             {
                 row.LoadFrom(current);
@@ -132,7 +117,7 @@ public partial class MainWindow : Window
             _moduleRows.Add(row);
         }
 
-        _sourceManager.SourceStatusChanged += OnSourceStatusChanged;
+        _engine.SourceStatusChanged += OnSourceStatusChanged;
         _atemController.ConnectionStateChanged += OnAtemConnectionStateChanged;
         _orchestrator.TallyChangedV2 += OnTallyChangedV2;
         _orchestrator.MultiviewChanged += OnMultiviewChanged;
@@ -149,7 +134,7 @@ public partial class MainWindow : Window
 
         Unloaded += (_, _) =>
         {
-            _sourceManager.SourceStatusChanged -= OnSourceStatusChanged;
+            _engine.SourceStatusChanged -= OnSourceStatusChanged;
             _atemController.ConnectionStateChanged -= OnAtemConnectionStateChanged;
             _orchestrator.TallyChangedV2 -= OnTallyChangedV2;
             _orchestrator.MultiviewChanged -= OnMultiviewChanged;
@@ -396,9 +381,7 @@ public partial class MainWindow : Window
 
         _multiviewFullscreen?.Close();
         _multiviewFullscreen = new MultiviewFullscreenWindow(
-            _presenterFactory,
-            _compositor,
-            _framePump,
+            _engine,
             () => _regionModel.ToLayout(),
             displayIndex);
         _multiviewFullscreen.Closed += (_, _) => _multiviewFullscreen = null;
@@ -671,7 +654,7 @@ public partial class MainWindow : Window
     {
         if (_projectorWindow is null)
         {
-            _projectorWindow = new ProjectorWindow(_hdmiOutput, _outputRouter, _config);
+            _projectorWindow = new ProjectorWindow(_engine, _config);
             _projectorWindow.Closed += (_, _) => _projectorWindow = null;
         }
 

@@ -13,8 +13,8 @@ public sealed record EngineOptions(
 
 /// <summary>
 /// The single video-engine boundary for the switcher (docs/specs/libobs-engine-migration.md §2.1).
-/// Replaces the GStreamer/DirectX-era <see cref="IInputSourceManager"/> / <see cref="ICompositorEngine"/> /
-/// <see cref="IVirtualCameraOutput"/> trio with one declarative surface that <c>Switcher.App</c> and
+/// Replaces the GStreamer/DirectX-era source-manager / compositor / virtual-camera trio with one
+/// declarative surface that <c>Switcher.App</c> and
 /// <c>Switcher.Web</c> depend on. The real implementation (<c>Switcher.Engine.LibObsVideoEngine</c>)
 /// drives libobs through P/Invoke; tests inject <c>Switcher.Engine.FakeVideoEngine</c>.
 ///
@@ -64,9 +64,9 @@ public interface IVideoEngine
 
     // --- preview taps (App WriteableBitmap pump) ---------------------------
 
-    FrameData GetProgramFrame();
-
-    FrameData GetPreviewFrame();
+    /// <summary>Latest composited frame for a target token: <c>PGM1</c>/<c>PGM2</c>/<c>PVW1</c>/<c>PVW2</c>/
+    /// <c>MULTIVIEW</c>/<c>SRC:&lt;id&gt;</c>. Returns an empty frame when nothing has been rendered yet.</summary>
+    FrameData GetFrame(string target);
 
     // --- multiview ---------------------------------------------------------
 

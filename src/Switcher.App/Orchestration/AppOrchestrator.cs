@@ -6,8 +6,6 @@ using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Hid.Backlight;
 using Switcher.Hid.Input;
-using Switcher.Media;
-using Switcher.VirtualCam;
 using Switcher.Web;
 
 namespace Switcher.App.Orchestration;
@@ -22,11 +20,10 @@ namespace Switcher.App.Orchestration;
 /// version) across all three input paths - HID, Web, and WS/UI - so they can never interleave into an
 /// inconsistent tally or backlight state.
 ///
-/// Depends on the *concrete* <see cref="InputSourceManager"/>/<see cref="CompositorEngine"/>/
-/// <see cref="AtemController"/> rather than their Contracts interfaces because the v2 dual-ME/OBS-source
-/// surface (<see cref="CompositorEngine.SetSourceEnabled"/>, <see cref="InputSourceManager.AddSource(SourceDefinition)"/>,
-/// <see cref="AtemController.SetMapping"/>, ...) is concrete-only; the interfaces only expose the v1
-/// single-bus shim that <see cref="ApplyConfigAsync"/> still uses for back-compat.
+/// Drives the single <see cref="IVideoEngine"/> abstraction (libobs migration) for all source/ME/output
+/// mutations, plus the concrete <see cref="AtemController"/> for ATEM relay. The v2 dual-ME/OBS-source
+/// surface (SetSourceEnabled, AddSource(SourceDefinition), ...) lives on <see cref="IVideoEngine"/>;
+/// <see cref="ApplyConfigAsync"/> still uses the legacy single-channel add for back-compat.
 /// </summary>
 public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSink
 {
@@ -38,11 +35,9 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     private const string DirectCommandControllerId = "__direct__";
     private const int DirectCommandButtonId = 0;
 
-    private readonly InputSourceManager _sourceManager;
-    private readonly CompositorEngine _compositor;
+    private readonly IVideoEngine _engine;
     private readonly AtemController _atemController;
     private readonly ITallyBroadcaster _tallyBroadcaster;
-    private readonly OutputRouter _outputRouter;
     private readonly HidBacklightService _hidBacklightService;
     private readonly BacklightCalculator _backlightCalculator = new();
     private readonly RuntimeConfigStore _runtimeConfigStore;
@@ -77,21 +72,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     private RuntimeConfig _runtimeConfig;
 
     public AppOrchestrator(
-        InputSourceManager sourceManager,
-        CompositorEngine compositor,
+        IVideoEngine engine,
         AtemController atemController,
         ITallyBroadcaster tallyBroadcaster,
-        OutputRouter outputRouter,
         HidBacklightService hidBacklightService,
         RuntimeConfigStore runtimeConfigStore,
         AppConfig config,
         ILogger<AppOrchestrator> logger)
     {
-        _sourceManager = sourceManager;
-        _compositor = compositor;
+        _engine = engine;
         _atemController = atemController;
         _tallyBroadcaster = tallyBroadcaster;
-        _outputRouter = outputRouter;
         _hidBacklightService = hidBacklightService;
         _runtimeConfigStore = runtimeConfigStore;
         _config = config;
@@ -108,11 +99,11 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         try
         {
-            _outputRouter.ApplyOutputs(new OutputsRequest(_runtimeConfig.OutputAssignments));
+            _engine.ApplyOutputs(new OutputsRequest(_runtimeConfig.OutputAssignments));
         }
         catch (ArgumentException ex)
         {
-            _logger.LogWarning(ex, "Persisted output assignments were invalid; keeping OutputRouter defaults.");
+            _logger.LogWarning(ex, "Persisted output assignments were invalid; keeping engine defaults.");
         }
     }
 
@@ -145,12 +136,12 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _sourceManager.AddSource(request.TargetChannel, request.SourceType, request.SourceUrl);
+            _engine.AddSource(request.TargetChannel, request.SourceType, request.SourceUrl);
 
             if (request.PipSettings is { } pip)
             {
                 _previewSettings[request.TargetChannel] = pip;
-                _compositor.ApplyPipSettings(request.TargetChannel, pip);
+                _engine.ApplyPipSettings(request.TargetChannel, pip);
                 PublishTallyV1Locked();
             }
         }
@@ -164,7 +155,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _sourceManager.AddSource(source);
+            _engine.AddSource(source);
         }
 
         return Task.CompletedTask;
@@ -176,7 +167,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _sourceManager.AddSource(source with { Id = id });
+            _engine.AddSource(source with { Id = id });
         }
 
         return Task.CompletedTask;
@@ -190,9 +181,9 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         {
             // Unmount from both buses first so no stale PGM/PVW layer survives the source's removal
             // (CompositorEngine has no "source was deleted" notion of its own).
-            _compositor.SetSourceEnabled(ProgramBus.Pgm1, id, enabled: false);
-            _compositor.SetSourceEnabled(ProgramBus.Pgm2, id, enabled: false);
-            _sourceManager.RemoveSource(id);
+            _engine.SetSourceEnabled(ProgramBus.Pgm1, id, enabled: false);
+            _engine.SetSourceEnabled(ProgramBus.Pgm2, id, enabled: false);
+            _engine.RemoveSource(id);
 
             foreach (var bus in _previewSourceIds.Keys)
             {
@@ -212,11 +203,11 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _compositor.ApplyProgram(request);
+            _engine.ApplyProgram(request);
 
             var resolvedIds = request.Layers
                 .Select(layer => layer.SourceId)
-                .Where(id => _sourceManager.TryResolveChannel(id, out _))
+                .Where(id => _engine.TryResolveChannel(id, out _))
                 .ToHashSet();
             _previewSourceIds[request.Bus] = resolvedIds;
 
@@ -255,8 +246,8 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _outputRouter.ApplyOutputs(request);
-            SaveRuntimeConfigLocked(_runtimeConfig with { OutputAssignments = _outputRouter.CurrentAssignments });
+            _engine.ApplyOutputs(request);
+            SaveRuntimeConfigLocked(_runtimeConfig with { OutputAssignments = _engine.CurrentAssignments });
         }
 
         return Task.CompletedTask;
@@ -350,7 +341,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
     /// <summary>Subscribed to <see cref="HidInputService.SwitchEdge"/> by the composition root
     /// (docs/tasks/agent-A2-006-app-integration-v2.md step 2): translates a physical module switch
-    /// edge into either a PGM-bus mount/unmount (<see cref="CompositorEngine.SetSourceEnabled"/>) or an
+    /// edge into either a PGM-bus mount/unmount (<c>IVideoEngine.SetSourceEnabled</c>) or an
     /// ATEM relay, per whichever (module_index, switch) pairs are present in the current
     /// <see cref="AtemConfig"/> mapping loaded via <see cref="ApplyAtemConfigAsync"/>.</summary>
     public void HandleSwitchEdge(SwitchEdgeEvent edge)
@@ -376,7 +367,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
                 return;
             }
 
-            _compositor.SetSourceEnabled(bus, sourceId, edge.IsRising);
+            _engine.SetSourceEnabled(bus, sourceId, edge.IsRising);
             if (edge.IsRising)
             {
                 _previewSourceIds[bus].Add(sourceId);
@@ -392,8 +383,8 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
     /// <summary>Subscribed to <see cref="HidInputService.VrChanged"/> by the composition root. Only
     /// <c>"Opacity"</c> is wired today, and only for sources already mounted on PGM1: PGM2 has no
-    /// bus-aware "update one layer's settings" primitive in <see cref="CompositorEngine"/> today (only
-    /// the PGM1-only <see cref="CompositorEngine.ApplyPipSettings"/> compat shim), and adding one is out
+    /// bus-aware "update one layer's settings" primitive in <c>IVideoEngine</c> today (only
+    /// the PGM1-only <c>IVideoEngine.ApplyPipSettings</c> compat shim), and adding one is out
     /// of this task's subtree (<c>Switcher.Media</c> is owned by agent-A2-002).</summary>
     public void HandleVrChanged(VrChangedEvent vrEvent)
     {
@@ -412,7 +403,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
                 return;
             }
 
-            if (!_sourceManager.TryResolveChannel(sourceId, out var channel) ||
+            if (!_engine.TryResolveChannel(sourceId, out var channel) ||
                 !_previewSettings.TryGetValue(channel, out var current))
             {
                 return;
@@ -420,7 +411,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
             var updated = current with { Opacity = vrEvent.Value / 255.0 };
             _previewSettings[channel] = updated;
-            _compositor.ApplyPipSettings(channel, updated);
+            _engine.ApplyPipSettings(channel, updated);
         }
     }
 
@@ -431,7 +422,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
             switch (mapping.Action)
             {
                 case CompositeAction.Take:
-                    _compositor.Take();
+                    _engine.Take();
                     _programActiveChannels = EnabledChannelsLocked();
                     break;
 
@@ -461,7 +452,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         var current = _previewSettings.TryGetValue(channel, out var existing) ? existing : DefaultPipSettings(channel);
         var updated = current with { Enabled = !current.Enabled };
         _previewSettings[channel] = updated;
-        _compositor.ApplyPipSettings(channel, updated);
+        _engine.ApplyPipSettings(channel, updated);
     }
 
     private static PipSettings DefaultPipSettings(int channel) =>
@@ -469,8 +460,8 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
             Enabled: true,
             X: 0,
             Y: 0,
-            Width: CompositorEngine.DefaultCanvasWidth,
-            Height: CompositorEngine.DefaultCanvasHeight,
+            Width: EngineDefaults.CanvasWidth,
+            Height: EngineDefaults.CanvasHeight,
             Opacity: 1.0,
             ZOrder: channel,
             Crop: null);
@@ -521,7 +512,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         var channels = new List<int>();
         foreach (var id in sourceIds)
         {
-            if (_sourceManager.TryResolveChannel(id, out var channel))
+            if (_engine.TryResolveChannel(id, out var channel))
             {
                 channels.Add(channel);
             }

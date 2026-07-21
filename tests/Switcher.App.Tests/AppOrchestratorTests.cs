@@ -111,7 +111,7 @@ public sealed class AppOrchestratorTests
     }
 
     [Fact]
-    public async Task ApplyOutputsAsync_UpdatesOutputRouterAssignments()
+    public async Task ApplyOutputsAsync_UpdatesEngineAssignments()
     {
         using var harness = new OrchestratorTestHarness();
 
@@ -120,7 +120,7 @@ public sealed class AppOrchestratorTests
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm2, null, null, null),
         ]));
 
-        var assignment = Assert.Single(harness.OutputRouter.CurrentAssignments, a => a.Sink == OutputSink.Vcam1);
+        var assignment = Assert.Single(harness.Engine.CurrentAssignments, a => a.Sink == OutputSink.Vcam1);
         Assert.Equal(OutputSource.Pgm2, assignment.Source);
     }
 
@@ -200,7 +200,7 @@ public sealed class AppOrchestratorTests
         // The final HandleSwitchEdge call above uses i=49 (odd -> falling), so the source ends
         // unmounted; the key assertion is that concurrent HID/Web/legacy input never throws or
         // corrupts OutputRouter's assignment table.
-        var assignment = Assert.Single(harness.OutputRouter.CurrentAssignments, a => a.Sink == OutputSink.Vcam2);
+        var assignment = Assert.Single(harness.Engine.CurrentAssignments, a => a.Sink == OutputSink.Vcam2);
         Assert.Equal(OutputSource.Pgm1, assignment.Source);
     }
 }
@@ -210,30 +210,22 @@ public sealed class AppOrchestratorTests
 /// can simulate a restart against the same <c>runtime-config.json</c>.</summary>
 internal sealed class OrchestratorTestHarnessAtPath : IDisposable
 {
-    private readonly Switcher.Media.InputSourceManager _sourceManager;
-    private readonly Switcher.Media.CompositorEngine _compositor;
     private readonly Switcher.Atem.AtemController _atemController;
-    private readonly Switcher.VirtualCam.DualVirtualCameraOutput _virtualCameraOutput;
     private readonly Switcher.Hid.HidBacklightService _hidBacklightService;
 
     public OrchestratorTestHarnessAtPath(string path)
     {
-        _sourceManager = new Switcher.Media.InputSourceManager(Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
-        _compositor = new Switcher.Media.CompositorEngine(_sourceManager);
+        var engine = new Switcher.Engine.FakeVideoEngine();
         _atemController = new Switcher.Atem.AtemController(
             Switcher.Atem.ButtonCommandMapping.Empty,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Switcher.Atem.AtemController>.Instance);
-        _virtualCameraOutput = new Switcher.VirtualCam.DualVirtualCameraOutput();
-        var outputRouter = new Switcher.VirtualCam.OutputRouter(_virtualCameraOutput);
         _hidBacklightService = new Switcher.Hid.HidBacklightService();
         var runtimeConfigStore = new Switcher.App.Configuration.RuntimeConfigStore(path, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
         Orchestrator = new Switcher.App.Orchestration.AppOrchestrator(
-            _sourceManager,
-            _compositor,
+            engine,
             _atemController,
             new FakeTallyBroadcaster(),
-            outputRouter,
             _hidBacklightService,
             runtimeConfigStore,
             Switcher.App.Configuration.AppConfig.CreateDefault(),
@@ -244,10 +236,7 @@ internal sealed class OrchestratorTestHarnessAtPath : IDisposable
 
     public void Dispose()
     {
-        _sourceManager.Dispose();
-        _compositor.Dispose();
         _atemController.Dispose();
-        _virtualCameraOutput.Dispose();
         _hidBacklightService.Dispose();
     }
 }

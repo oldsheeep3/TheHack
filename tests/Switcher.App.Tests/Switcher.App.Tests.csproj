@@ -21,10 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Switcher.Contracts\Switcher.Contracts.csproj" />
-    <ProjectReference Include="..\..\src\Switcher.Media\Switcher.Media.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Engine\Switcher.Engine.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Web\Switcher.Web.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Atem\Switcher.Atem.csproj" />
-    <ProjectReference Include="..\..\src\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Hid\Switcher.Hid.csproj" />
   </ItemGroup>
 

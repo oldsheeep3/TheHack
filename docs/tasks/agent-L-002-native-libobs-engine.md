@@ -1,6 +1,6 @@
 ---
 name: agent-L-002-native-libobs-engine
-status: planning
+status: doing
 pid: 
 agent_cli: opus
 ---

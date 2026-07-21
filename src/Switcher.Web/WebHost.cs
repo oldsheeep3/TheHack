@@ -8,7 +8,7 @@ namespace Switcher.Web;
 /// <summary>
 /// Embedded Kestrel host exposing the config/sources REST API and the controller-input WebSocket
 /// (docs/specs/pc-switcher-app.md §2.4). Constructed and owned by the app composition root; the
-/// core services (<see cref="ISwitcherConfigService"/> / <see cref="IInputSourceManager"/> /
+/// core services (<see cref="ISwitcherConfigService"/> / <see cref="IVideoEngine"/> /
 /// <see cref="IControllerInputSink"/> / <see cref="IDeviceQueryService"/>) are injected so this
 /// library never references their concrete implementations.
 /// </summary>
@@ -18,19 +18,19 @@ public sealed class WebHost : IAsyncDisposable
 
     /// <param name="deviceQueryService">
     /// Backs <c>GET /api/v1/devices/{type}</c> and <c>GET /api/v1/srt/setup</c>. Optional so existing
-    /// composition roots keep compiling; the App host is expected to inject the Media-backed concrete
+    /// composition roots keep compiling; the App host is expected to inject the engine-backed concrete
     /// (docs/specs/multiview-output-revision.md §4.1). When omitted, a null-object that reports no
     /// devices is used so the endpoints stay responsive rather than throwing.
     /// </param>
     public WebHost(
         ISwitcherConfigService configService,
-        IInputSourceManager sourceManager,
+        IVideoEngine videoEngine,
         IControllerInputSink inputSink,
         int port = ProtocolConstants.WebPort,
         IDeviceQueryService? deviceQueryService = null)
     {
         ArgumentNullException.ThrowIfNull(configService);
-        ArgumentNullException.ThrowIfNull(sourceManager);
+        ArgumentNullException.ThrowIfNull(videoEngine);
         ArgumentNullException.ThrowIfNull(inputSink);
 
         var builder = WebApplication.CreateBuilder();
@@ -42,7 +42,7 @@ public sealed class WebHost : IAsyncDisposable
         WebHostServices.Configure(
             builder.Services,
             configService,
-            sourceManager,
+            videoEngine,
             inputSink,
             deviceQueryService ?? UnavailableDeviceQueryService.Instance);
 

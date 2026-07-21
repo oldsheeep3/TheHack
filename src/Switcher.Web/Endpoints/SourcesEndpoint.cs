@@ -5,7 +5,7 @@ namespace Switcher.Web.Endpoints;
 
 internal static class SourcesEndpoint
 {
-    public static IResult Get(IInputSourceManager sourceManager) => Results.Ok(sourceManager.GetSources());
+    public static IResult Get(IVideoEngine videoEngine) => Results.Ok(videoEngine.GetSources());
 
     public static async Task<IResult> PostAsync(
         SourceDefinition? source,
