@@ -28,3 +28,4 @@ firmware/switcher-module/test/test_sk6812_frame
 firmware/switcher-module/test/test_i2c_regs
 /.vs
 *.user
+obs-studio/
