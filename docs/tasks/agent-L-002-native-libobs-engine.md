@@ -49,6 +49,31 @@ agent_cli: opus
 - **標準ソース制約**: 追加するソースは OBS バンドル + DistroAV(NDI) のみ。独自デコーダを持ち込まない。
 - 検証: `.claude/review-patterns.md`「リソース管理」「境界」「並行性」。
 
+## 実機検証で判明した実装ポイント（2026-07-21 追記）
+
+L-001 スキャフォールドを **実 OBS 環境でビルド・起動して**判明した事項。実装時にここで詰まるので先に対処すること。
+
+### 検証済みのビルド/実行経路（土台は動く）
+- **採用 OBS = 31.0.3**（Windows）。libobs だけを `cmake --build build_x64 --target libobs` でビルドし、`obs.lib`(import) / `obs.dll` / 生成ヘッダ **`obsconfig.h`**（`build_x64/config/`、ハイフン無し）を得る。公開ヘッダは `<obs-studio>/libobs/`。
+- ネイティブビルドは `native/switcher-engine/build.bat`（本セッションで追加）で、`LIBOBS_INCLUDE_DIR`（`libobs` と `build_x64/config` を `;` 区切りで両方）+ `LIBOBS_LIB` を渡す方式Bが確実。
+- `Switcher.App.csproj` にビルド後コピー Target を追加済み → `switcher-engine.dll` は VS F5/Rebuild でも常に出力へ入る。**マネージド↔P/Invoke 境界・DLLチェーン(`switcher-engine.dll`→`obs.dll`)ロードは検証済み**で、`engine_startup` の実行到達までは確認できている。
+
+### 現状のブロッカー：`obs_reset_video` 失敗（最優先で対処）
+スキャフォールドの `engine_startup` は **`obs_reset_video` で失敗して `nullptr` を返す**（マネージド側は "Native switcher-engine failed to start" で停止）。原因は **ホスト型 libobs のデータパス未配線**：
+
+- **`obs_reset_video` の *前* に `obs_add_data_path(<obs>/data/libobs/)` が必須**。これが無いと libobs 組み込み effect（`default.effect` 等）を見つけられず graphics 初期化が失敗する。※ステップ2は module path のみ言及していたが、**コア data path は別に必要**。
+- ソース用に `obs_add_module_path(<obs>/obs-plugins/64bit/, <obs>/data/obs-plugins/%module%/)` → `obs_load_all_modules()`（module 読込失敗は起動を止めない）。
+- **`options_json` のパースは libobs 同梱の `obs_data_create_from_json()` で可能**（追加依存不要。`TODO(L-002): parse options_json` の解）。
+- `graphics_module` が `"libobs-d3d11"` 固定 → 非Windows開発機の compile-check 用に opengl フォールバック導線を検討（実配布は d3d11）。
+- **診断**: `engine_startup` 冒頭で `base_set_log_handler(...)` を仕込み libobs 自身のログをファイル出力すると、effect/module/版不一致のどれで落ちたか即判る。
+
+### マネージド側との依存（タスク境界に注意）
+- 現行 `EngineOptions`(`Switcher.Contracts`) は `CanvasWidth/Height/Fps/ModulePath` のみで、**libobs コア data パス / plugin(bin・data) パスのフィールドが無い**。`AppHostService` も `new EngineOptions()`（全デフォルト）で呼んでいる。
+- これらパスを渡すには **`Switcher.Contracts`/`Switcher.App` の変更が必要**だが、本タスクは「`.sln`・`src/Switcher.*` を触らない」制約（対象ディレクトリ節）。**マネージド側フィールド追加は別タスク/計画で調整**すること（暫定で env 変数や options_json 固定値で回避も可だが、恒久解はオプション拡張）。
+
+### 実行時の前提
+- `obs.dll` + `data/` + プラグイン + `libobs-d3d11.dll` が到達可能であること（インストール済み OBS の `bin\64bit` を PATH、またはビルドの `build_x64\rundir\Release\bin\64bit`）。バージョンは import lib と一致必須。
+
 ## 参照
 - 仕様: `docs/specs/libobs-engine-migration.md` §2.1〜§2.4, §9
 - 契約: `native/switcher-engine/include/engine.h`（L-001）
