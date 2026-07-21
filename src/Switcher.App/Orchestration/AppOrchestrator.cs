@@ -96,7 +96,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         {
             RebuildAtemMappingLocked();
         }
+    }
 
+    /// <summary>
+    /// Replays the persisted output routing onto the engine. Must run <em>after</em>
+    /// <see cref="IVideoEngine.StartAsync"/> - the libobs engine's output methods reject calls before the
+    /// native context exists, so this cannot live in the constructor (the DI graph is built before the
+    /// startup sequence boots the engine). The app host invokes this as the first step after the engine
+    /// starts.
+    /// </summary>
+    public void RestorePersistedOutputs()
+    {
         try
         {
             _engine.ApplyOutputs(new OutputsRequest(_runtimeConfig.OutputAssignments));

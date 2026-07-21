@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
+using Switcher.App.Orchestration;
 using Switcher.Atem;
 using Switcher.Contracts;
 using Switcher.Hid;
@@ -21,6 +22,7 @@ namespace Switcher.App.Services;
 public sealed class AppHostService
 {
     private readonly IVideoEngine _engine;
+    private readonly AppOrchestrator _orchestrator;
     private readonly WebHost _webHost;
     private readonly AtemController _atemController;
     private readonly HidInputService _hidInputService;
@@ -31,6 +33,7 @@ public sealed class AppHostService
 
     public AppHostService(
         IVideoEngine engine,
+        AppOrchestrator orchestrator,
         WebHost webHost,
         AtemController atemController,
         HidInputService hidInputService,
@@ -40,6 +43,7 @@ public sealed class AppHostService
         ILogger<AppHostService> logger)
     {
         _engine = engine;
+        _orchestrator = orchestrator;
         _webHost = webHost;
         _atemController = atemController;
         _hidInputService = hidInputService;
@@ -53,6 +57,10 @@ public sealed class AppHostService
     {
         _logger.LogInformation("Starting Switcher.App: booting video engine.");
         await _engine.StartAsync(new EngineOptions()).ConfigureAwait(false);
+
+        // Replay persisted output routing now that the engine's native context exists (the orchestrator
+        // was constructed during DI build, before the engine started, so it defers this from its ctor).
+        _orchestrator.RestorePersistedOutputs();
 
         _logger.LogInformation("Connecting ATEM client to {AtemIp}.", _config.AtemIp);
         _atemController.Connect(_config.AtemIp);
