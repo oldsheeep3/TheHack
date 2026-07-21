@@ -78,8 +78,49 @@ dotnet test  HybridSwitcher.sln     # 全ユニットテスト
 ```
 
 `Switcher.App` は WPF (`net9.0-windows`) だが `EnableWindowsTargeting` によりLinuxでもCIでも
-**コンパイルは可能**。ただし GStreamer / DirectX / DirectShow のネイティブランタイムは Windows 限定で、
-**実行**には Windows 10/11 と各コンポーネントREADMEに記載の前提が必要。
+**コンパイルは可能**。ただしネイティブ `switcher-engine`(libobs) ランタイムは Windows 限定で、
+**実行**には Windows 10/11 と下記の起動順が必要。
+
+### ネイティブ映像エンジン（libobs）のビルド & Windows 実起動 — 起動順
+
+`switcher-engine.dll`（`native/switcher-engine/`）は **Windows + OBS 専用**で `.sln` 外。以下が検証済みの順序
+（詳細は [switcher-engine README](native/switcher-engine/README.md) / [L-002 タスク](docs/tasks/agent-L-002-native-libobs-engine.md)）。
+
+**前提**: Windows / Visual Studio 2022（「C++によるデスクトップ開発」）/ CMake ≥ 3.24 / インストール済み OBS（例: 31.0.3）。
+以下はすべて **「x64 Native Tools Command Prompt for VS 2022」** から実行する（`cmake`/`cl` に PATH が通る。通常の cmd/PowerShell 不可）。
+
+1. **libobs dev files を用意**（採用 OBS と**同一版**のソースをビルド。インストール済み OBS アプリだけではヘッダ/`obs.lib` が無い）
+   ```bat
+   git clone --recursive https://github.com/obsproject/obs-studio.git
+   cd obs-studio && git checkout 31.0.3 && git submodule update --init --recursive
+   cmake --preset windows-x64
+   cmake --build build_x64 --config Release --target libobs
+   ```
+   → `build_x64\libobs\Release\{obs.lib,obs.dll}`、生成ヘッダ `build_x64\config\obsconfig.h`、公開ヘッダ `libobs\`。
+
+2. **`switcher-engine.dll` をビルド**（リポジトリルートで。ヘッダは公開＋生成の2フォルダを `;` 区切りで渡す）
+   ```bat
+   set OBS=<obs-studio のパス>
+   set LIBOBS_INCLUDE_DIR=%OBS%\libobs;%OBS%\build_x64\config
+   set LIBOBS_LIB=%OBS%\build_x64\libobs\Release\obs.lib
+   native\switcher-engine\build.bat
+   ```
+   `Switcher.App.csproj` がビルド時に `switcher-engine.dll` を App 出力へ自動コピーする（VS F5/Rebuild でも維持）。
+
+3. **App を起動**（`obs.dll` 等を PATH に通してから）
+   - **Visual Studio**: 構成 `Debug`/**`x64`** → `Switcher.App` をスタートアップに → プロパティ「デバッグ」→ デバッグ起動プロファイルUIで環境変数
+     `PATH = C:\Program Files\obs-studio\bin\64bit;%PATH%`（版一致のインストール済み OBS）→ **F5**。
+   - **コマンドライン**:
+     ```bat
+     dotnet build src\Switcher.App\Switcher.App.csproj -c Release
+     set PATH=%OBS%\build_x64\rundir\Release\bin\64bit;%PATH%
+     src\Switcher.App\bin\x64\Release\net9.0-windows\Switcher.App.exe
+     ```
+
+> **前提/注意**
+> - `obs.dll` + `data\` + プラグイン + `libobs-d3d11.dll` が PATH 上で到達可能、かつ import lib(`obs.lib`) と**同一版**であること（不一致は起動失敗/クラッシュ）。
+> - **L-002 未完のうちは `engine_startup` が `obs_reset_video` で失敗**する（libobs データパス未配線。[L-002 タスク](docs/tasks/agent-L-002-native-libobs-engine.md)の「実機検証で判明した実装ポイント」参照）。
+> - ネイティブ抜きで App を動かすなら DI（`src/Switcher.App/Composition/ServiceCollectionExtensions.cs`）を `FakeVideoEngine` に差し替える。
 
 ### スマホWebブリッジ（React/TS）
 
