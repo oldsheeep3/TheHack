@@ -29,3 +29,10 @@ firmware/switcher-module/test/test_i2c_regs
 /.vs
 *.user
 obs-studio/
+# native switcher-engine build artifacts
+native/switcher-engine/build/
+switcher-engine.dll
+
+# editor history folders (any location)
+**/.history/
+rp2354/
