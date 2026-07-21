@@ -62,10 +62,12 @@
 
 ## 3. 技術スタック（確定）
 
-- **言語/FW**: C# / .NET 9（WPF）※Windows 10/11 前提。
-- **映像デコード・ストリーミング**: GStreamer（GstSharp）。SRT/NDI/UVC をスレッド分離でデコード。NDIは NDI SDK 前提（未導入時は導線表示）。
-- **GPU合成**: DirectX 11（Vortice）。フレームをGPUテクスチャへ直接転送しシェーダで合成。2系統MEを個別レンダーターゲットで保持。
-- **仮想カメラ出力**: 仮想カメラデバイス（DirectShow/MFフィルタ）×2。
+> **(仕様変更: 2026-07-21)** 映像エンジンは **libobs へ全面移行**する。本節の GStreamer / DirectX 自作合成 / 自作仮想カメラは廃止され、[`libobs-engine-migration.md`](./libobs-engine-migration.md) の方針に置き換わる（`Switcher.Media` / `Switcher.VirtualCam` は削除、ネイティブ libobs エンジン + `Switcher.Engine`(P/Invoke) を新設）。以下の記述は移行前の履歴として残す。
+
+- **言語/FW**: C# / .NET 9（WPF）※Windows 10/11 前提。（**維持**）
+- **映像デコード・ストリーミング**: ~~GStreamer（GstSharp）~~ → **libobs**（OBS 標準搭載ソース）。SRT はメディアソース(`srt://`)、NDI は DistroAV プラグイン前提。
+- **GPU合成**: ~~DirectX 11（Vortice）自作合成~~ → **libobs 内部合成**。2系統MEは `obs_view`×2 で保持しソースを共有参照。
+- **仮想カメラ出力**: ~~自作 DirectShow/MF フィルタ×2~~ → **libobs 仮想カメラ出力**（2系統化は技術検証項目。移行仕様書 §9 参照）。
 - **Webサーバー**: ASP.NET Core Kestrel（アプリ内蔵）。
 - **ATEM遠隔制御**: 既存 `Switcher.Atem`（UDP 9910, ATEM純正プロトコル）を継続利用。
 
@@ -89,6 +91,7 @@
 
 ## 7. 仕様変更履歴
 
+- **2026-07-21**: 映像エンジンを **libobs へ全面移行**する改訂を別紙 [`libobs-engine-migration.md`](./libobs-engine-migration.md) に策定（§3 技術スタックを上書き）— GStreamer/DirectX 自作合成・自作仮想カメラを廃止し、`Switcher.Media`/`Switcher.VirtualCam` を削除、ネイティブ libobs エンジン + `Switcher.Engine`(P/Invoke, `IVideoEngine` 抽象) を新設。デュアルM/E は `obs_view`×2＋ソース共有で実現。**その他の機能要件（§2）は維持**。開発は `main` 基点の `develop` ブランチを基点とする。
 - **2026-07-18**: マルチビュー&出力改訂を別紙 [`multiview-output-revision.md`](./multiview-output-revision.md) に策定（§2.3/§2.4 の加算的改訂）— 全画面出力のディスプレイ指定＋同一画面警告、操作画面ディスプレイのトレイ変更、マルチビュー矩形結合(ドラッグ)、マルチビュー全画面(独立ウィンドウ)、NDI出力2系統、ソース追加3段UI+デバイス列挙、SRTセットアップ/ATEMホスト名表示。
 - **2026-07-18**: 大幅改訂 — OBS的ソース自由追加(NDI/WebCam/SRT)、2系統ME(PGM1/PGM2)+PiP、4x4コンフィギュラブル・マルチビュー、仮想カメラ×2+HDMI(全画面/カーソル非表示)出力、HID入力受信＋バックライト算出、設定WebをPCホスト、タリー抽出削除(配信は維持)。**ATEM遠隔制御(§2.8)は維持**（ATEMは入力ソース兼遠隔制御対象。src1〜4のATEM一括管理に対応）。
 - **2026-07-17**: 初版作成。
