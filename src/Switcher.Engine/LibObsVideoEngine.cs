@@ -19,14 +19,29 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
     // Fixed readback targets the App's FramePumpService reads every tick; each needs an enabled native tap.
     private static readonly string[] PumpedBusTargets = ["PGM1", "PGM2", "PVW1", "PVW2", "MULTIVIEW"];
 
-    private readonly object _gate = new();
-    private readonly Dictionary<string, SourceInfo> _sourcesById = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _channelById = new(StringComparer.Ordinal);
+    // Lifecycle only (start/dispose). Never held across anything else, so nothing can be waiting on it
+    // while the native context is being torn down.
+    private readonly object _lifecycleGate = new();
+
+    // Serializes the native calls that return a pointer into an engine-owned buffer, which the next call
+    // on the same context overwrites. Deliberately NOT the same lock as anything the libobs graphics
+    // thread can touch: these calls can sit inside the native context lock for a second or more (a
+    // DirectShow enumeration, the NDI finder's discovery wait), and a graphics thread blocked behind that
+    // would deadlock the engine — the native side parks the graphics thread while it holds that same
+    // context lock (engine_set_tap, rebind_bus_targets_locked).
+    private readonly object _nativeQueryGate = new();
+
+    // Concurrent because the source registry is read and written from the graphics thread (MarkSourceLive,
+    // once per tapped frame) as well as from the UI and Web threads. A plain lock here is what created the
+    // deadlock above: the graphics thread would block on a lock held by a thread waiting on the native
+    // context lock, which in turn was waiting for the graphics thread to park.
+    private readonly ConcurrentDictionary<string, SourceInfo> _sourcesById = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _channelById = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, FrameData> _lastFrameByTarget = new();
 
     private IntPtr _ctx;
-    private int _nextChannel;
-    private IReadOnlyList<OutputAssignment> _assignments = [];
+    private int _nextChannel = -1;  // Interlocked.Increment hands out 0 first
+    private volatile IReadOnlyList<OutputAssignment> _assignments = [];
 
     // Kept alive for the lifetime of the native context so the GC never collects the thunks libobs holds.
     private NativeMethods.FrameCallback? _frameCallback;
@@ -39,7 +54,7 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
     public Task StartAsync(EngineOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
-        lock (_gate)
+        lock (_lifecycleGate)
         {
             if (_ctx != IntPtr.Zero)
             {
@@ -75,46 +90,46 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
         return Task.CompletedTask;
     }
 
-    public IReadOnlyList<SourceInfo> GetSources()
-    {
-        lock (_gate)
-        {
-            return _sourcesById.Values.OrderBy(s => s.Order ?? s.Channel).ToList();
-        }
-    }
+    public IReadOnlyList<SourceInfo> GetSources() =>
+        _sourcesById.Values.OrderBy(s => s.Order ?? s.Channel).ToList();
 
     public IReadOnlyList<DeviceInfo> QueryDevices(DeviceQueryType type)
     {
-        lock (_gate)
+        var kind = type == DeviceQueryType.Ndi ? "NDI" : "WEBCAM";
+        var json = ReadNativeJson(ctx => NativeMethods.engine_enumerate_devices(ctx, kind));
+        if (string.IsNullOrEmpty(json))
         {
-            if (_ctx == IntPtr.Zero)
-            {
-                return [];
-            }
+            return [];
+        }
 
-            var kind = type == DeviceQueryType.Ndi ? "NDI" : "WEBCAM";
-            var ptr = NativeMethods.engine_enumerate_devices(_ctx, kind);
-            var json = Marshal.PtrToStringUTF8(ptr);  // copy now; the native buffer is reused next call
-            if (string.IsNullOrEmpty(json))
-            {
-                return [];
-            }
+        var devices = JsonSerializer.Deserialize<List<DeviceInfo>>(json, Json) ?? [];
+        // dshow device names can carry trailing CR/LF; normalize for display and stable ids.
+        return devices.Select(d => d with { Name = d.Name.Trim() }).ToList();
+    }
 
-            var devices = JsonSerializer.Deserialize<List<DeviceInfo>>(json, Json) ?? [];
-            // dshow device names can carry trailing CR/LF; normalize for display and stable ids.
-            return devices.Select(d => d with { Name = d.Name.Trim() }).ToList();
+    /// <summary>Runs a native call that returns a pointer to an engine-owned UTF-8 buffer and copies the
+    /// result out before releasing the gate, since the next such call overwrites that buffer. Only the
+    /// copy is under the lock — deserialization is not.</summary>
+    private string? ReadNativeJson(Func<IntPtr, IntPtr> call)
+    {
+        var ctx = _ctx;
+        if (ctx == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        lock (_nativeQueryGate)
+        {
+            return Marshal.PtrToStringUTF8(call(ctx));
         }
     }
 
     public void AddSource(SourceDefinition source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        int channel;
-        lock (_gate)
-        {
-            channel = _channelById.TryGetValue(source.Id, out var existing) ? existing : AllocateChannelLocked(source.Id);
-            _sourcesById[source.Id] = new SourceInfo(channel, source.Name, ToProtocol(source.Type), null, SourceStatus.Disconnected, source.Id, channel);
-        }
+        var channel = _channelById.GetOrAdd(source.Id, _ => Interlocked.Increment(ref _nextChannel));
+        var info = new SourceInfo(channel, source.Name, ToProtocol(source.Type), null, SourceStatus.Disconnected, source.Id, channel);
+        _sourcesById[source.Id] = info;
 
         var settings = source.Type switch
         {
@@ -134,11 +149,8 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
             // Native creation failed (rc 3 = obs_source_create returned null - typically an NDI source when
             // the DistroAV plugin is not installed, or an unknown type). Don't leave a phantom tile for a
             // source that has no native backing; roll back the registry entry and surface a clear error.
-            lock (_gate)
-            {
-                _sourcesById.Remove(source.Id);
-                _channelById.Remove(source.Id);
-            }
+            _sourcesById.TryRemove(source.Id, out _);
+            _channelById.TryRemove(source.Id, out _);
 
             throw new InvalidOperationException(
                 $"Native engine could not create source '{source.Id}' (type {source.Type}, code {rc}). " +
@@ -152,22 +164,15 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
 
         // Enable this source's preview tap so its live pixels reach the UI via GetFrame("SRC:<id>").
         NativeMethods.engine_set_tap(_ctx, $"SRC:{source.Id}", enabled: true);
-        SourceStatusChanged?.Invoke(this, _sourcesById[source.Id]);
+        SourceStatusChanged?.Invoke(this, info);
     }
 
     public void AddSource(int channel, SourceProtocol protocol, string? sourceUrl)
     {
         var id = $"ch{channel}";
-        lock (_gate)
-        {
-            _channelById[id] = channel;
-            if (channel >= _nextChannel)
-            {
-                _nextChannel = channel + 1;
-            }
-
-            _sourcesById[id] = new SourceInfo(channel, id, protocol, null, SourceStatus.Disconnected, id, channel);
-        }
+        _channelById[id] = channel;
+        BumpNextChannelTo(channel);
+        _sourcesById[id] = new SourceInfo(channel, id, protocol, null, SourceStatus.Disconnected, id, channel);
 
         RequireCtx();
         NativeMethods.engine_add_source(_ctx, id, protocol.ToString().ToUpperInvariant(), sourceUrl is null ? "{}" : JsonSerializer.Serialize(new { url = sourceUrl }, Json));
@@ -177,11 +182,8 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
     public void RemoveSource(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
-        lock (_gate)
-        {
-            _channelById.Remove(id);
-            _sourcesById.Remove(id);
-        }
+        _channelById.TryRemove(id, out _);
+        _sourcesById.TryRemove(id, out _);
 
         // Drop the cached frame too, or a re-added source with the same id shows the removed device's
         // last frame until its tap produces a new one.
@@ -192,13 +194,7 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
         SourceRemoved?.Invoke(this, id);
     }
 
-    public bool TryResolveChannel(string id, out int channel)
-    {
-        lock (_gate)
-        {
-            return _channelById.TryGetValue(id, out channel);
-        }
-    }
+    public bool TryResolveChannel(string id, out int channel) => _channelById.TryGetValue(id, out channel);
 
     public void SetSourceEnabled(ProgramBus bus, string sourceId, bool enabled)
     {
@@ -216,12 +212,7 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
     public void ApplyPipSettings(int channel, PipSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        string? id;
-        lock (_gate)
-        {
-            id = _channelById.FirstOrDefault(kv => kv.Value == channel).Key;
-        }
-
+        var id = _channelById.FirstOrDefault(kv => kv.Value == channel).Key;
         if (id is null)
         {
             return;
@@ -262,36 +253,18 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
 
     public IReadOnlyList<OutputStatus> QueryOutputStatus()
     {
-        lock (_gate)
-        {
-            if (_ctx == IntPtr.Zero)
-            {
-                return [];
-            }
-
-            var ptr = NativeMethods.engine_get_output_status(_ctx);
-            var json = Marshal.PtrToStringUTF8(ptr);  // copy now; the native buffer is reused next call
-            return string.IsNullOrEmpty(json)
-                ? []
-                : JsonSerializer.Deserialize<OutputStatusReport>(json, Json)?.Outputs ?? [];
-        }
+        var json = ReadNativeJson(NativeMethods.engine_get_output_status);
+        return string.IsNullOrEmpty(json)
+            ? []
+            : JsonSerializer.Deserialize<OutputStatusReport>(json, Json)?.Outputs ?? [];
     }
 
     public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices()
     {
-        lock (_gate)
-        {
-            if (_ctx == IntPtr.Zero)
-            {
-                return [];
-            }
-
-            var ptr = NativeMethods.engine_enumerate_audio_devices(_ctx);
-            var json = Marshal.PtrToStringUTF8(ptr);  // copy now; the native buffer is reused next call
-            return string.IsNullOrEmpty(json)
-                ? []
-                : JsonSerializer.Deserialize<List<AudioDeviceInfo>>(json, Json) ?? [];
-        }
+        var json = ReadNativeJson(NativeMethods.engine_enumerate_audio_devices);
+        return string.IsNullOrEmpty(json)
+            ? []
+            : JsonSerializer.Deserialize<List<AudioDeviceInfo>>(json, Json) ?? [];
     }
 
     public void ApplyAudioOutputs(AudioOutputsRequest request)
@@ -315,16 +288,10 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
             throw new ArgumentException($"Native engine rejected output assignments (code {rc}).", nameof(request));
         }
 
-        lock (_gate)
-        {
-            _assignments = request.Outputs.ToList();
-        }
+        _assignments = request.Outputs.ToList();
     }
 
-    public IReadOnlyList<OutputAssignment> CurrentAssignments
-    {
-        get { lock (_gate) { return _assignments; } }
-    }
+    public IReadOnlyList<OutputAssignment> CurrentAssignments => _assignments;
 
     public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId)
     {
@@ -340,16 +307,39 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
 
     public void Dispose()
     {
-        lock (_gate)
+        lock (_lifecycleGate)
         {
-            if (_ctx != IntPtr.Zero)
+            // Also under the query gate: engine_shutdown frees the buffers a concurrent
+            // enumerate/status call would be reading from.
+            lock (_nativeQueryGate)
             {
-                NativeMethods.engine_shutdown(_ctx);
-                _ctx = IntPtr.Zero;
+                if (_ctx != IntPtr.Zero)
+                {
+                    // Blocks until the render callback is removed and no tap callback is in flight, so the
+                    // delegates below are unreachable by the time they are dropped.
+                    NativeMethods.engine_shutdown(_ctx);
+                    _ctx = IntPtr.Zero;
+                }
             }
 
             _frameCallback = null;
             _stateCallback = null;
+        }
+    }
+
+    /// <summary>Raises the channel counter so a legacy explicit channel number is never handed out again.</summary>
+    private void BumpNextChannelTo(int channel)
+    {
+        var current = Volatile.Read(ref _nextChannel);
+        while (channel > current)
+        {
+            var previous = Interlocked.CompareExchange(ref _nextChannel, channel, current);
+            if (previous == current)
+            {
+                return;
+            }
+
+            current = previous;
         }
     }
 
@@ -392,22 +382,26 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
     /// well the device was actually running.</summary>
     private void MarkSourceLive(string id, int width, int height)
     {
-        var resolution = $"{width}x{height}";
-        SourceInfo updated;
-        lock (_gate)
+        // Runs on the libobs graphics thread, once per tapped frame. It must not take any lock a slower
+        // path could be holding: the native side parks this thread while holding its context lock, so
+        // blocking here behind a thread that is waiting for that context lock deadlocks the engine.
+        if (!_sourcesById.TryGetValue(id, out var current))
         {
-            if (!_sourcesById.TryGetValue(id, out var current) ||
-                (current.Status == SourceStatus.Connected && current.Resolution == resolution))
-            {
-                return;
-            }
-
-            updated = current with { Status = SourceStatus.Connected, Resolution = resolution };
-            _sourcesById[id] = updated;
+            return;
         }
 
-        // Raised outside the lock: this runs on the libobs graphics thread and handlers marshal to their
-        // own dispatcher, which must never be able to block frame delivery behind _gate.
+        var resolution = $"{width}x{height}";
+        if (current.Status == SourceStatus.Connected && current.Resolution == resolution)
+        {
+            return;
+        }
+
+        var updated = current with { Status = SourceStatus.Connected, Resolution = resolution };
+        if (!_sourcesById.TryUpdate(id, updated, current))
+        {
+            return;  // removed or updated concurrently; the next frame re-evaluates
+        }
+
         SourceStatusChanged?.Invoke(this, updated);
     }
 
@@ -423,13 +417,6 @@ public sealed class LibObsVideoEngine : IVideoEngine, IDisposable
         {
             throw new InvalidOperationException("Video engine has not been started.");
         }
-    }
-
-    private int AllocateChannelLocked(string id)
-    {
-        var channel = _nextChannel++;
-        _channelById[id] = channel;
-        return channel;
     }
 
     private static int BusToInt(ProgramBus bus) => bus == ProgramBus.Pgm2 ? 1 : 0;
