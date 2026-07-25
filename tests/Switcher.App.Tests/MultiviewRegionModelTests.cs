@@ -119,5 +119,76 @@ public sealed class MultiviewRegionModelTests
 
         Assert.Equal(16, model.Regions.Count);
         Assert.Equal("PVW1", model.RegionAt(1, 1)!.Content);
+        Assert.Equal(4, model.Rows);
+        Assert.Equal(4, model.Cols);
+    }
+
+    // --- resizable grid (4x4 … 6x6) ---------------------------------------------
+
+    [Theory]
+    [InlineData(5, 5, 25)]
+    [InlineData(6, 6, 36)]
+    [InlineData(4, 6, 24)]
+    public void Resize_GrowsTheGridAndFillsTheNewCells(int rows, int cols, int expectedCells)
+    {
+        var model = new MultiviewRegionModel();
+
+        model.Resize(rows, cols);
+
+        Assert.Equal(rows, model.Rows);
+        Assert.Equal(cols, model.Cols);
+        Assert.Equal(expectedCells, model.Regions.Count);
+        Assert.All(model.Regions, r => Assert.Equal("EMPTY", r.Content));
+    }
+
+    [Fact]
+    public void Resize_ClampsToTheSupportedRange()
+    {
+        var model = new MultiviewRegionModel();
+
+        model.Resize(1, 99);
+
+        Assert.Equal(MultiviewRegionModel.MinSize, model.Rows);
+        Assert.Equal(MultiviewRegionModel.MaxSize, model.Cols);
+    }
+
+    [Fact]
+    public void Resize_KeepsMergedRegionsThatStillFitAndDropsThoseThatDont()
+    {
+        var model = new MultiviewRegionModel();
+        model.Resize(6, 6);
+        model.SetContent(0, 0, "PGM1");
+        Assert.True(model.TryMerge([(0, 0), (0, 1), (1, 0), (1, 1)], out _));           // fits in 4x4
+        Assert.True(model.TryMerge([(4, 4), (4, 5), (5, 4), (5, 5)], out _));           // only fits in 6x6
+
+        model.Resize(4, 4);
+
+        var kept = model.RegionAt(0, 0)!;
+        Assert.Equal(2, kept.RowSpan);
+        Assert.Equal("PGM1", kept.Content);
+
+        // The out-of-range merge is gone and the grid is still fully tiled.
+        Assert.Equal(4, model.Rows);
+        Assert.Equal(13, model.Regions.Count);  // 16 cells - 4 merged into 1
+        Assert.All(model.Regions, r =>
+        {
+            Assert.InRange(r.Row + r.RowSpan, 1, 4);
+            Assert.InRange(r.Col + r.ColSpan, 1, 4);
+        });
+    }
+
+    [Fact]
+    public void ToLayout_ThenLoad_RoundTripsANonSquareGrid()
+    {
+        var model = new MultiviewRegionModel();
+        model.Resize(5, 6);
+        model.SetContent(4, 5, "PGM2");
+
+        var reloaded = new MultiviewRegionModel();
+        reloaded.Load(model.ToLayout());
+
+        Assert.Equal(5, reloaded.Rows);
+        Assert.Equal(6, reloaded.Cols);
+        Assert.Equal("PGM2", reloaded.RegionAt(4, 5)!.Content);
     }
 }

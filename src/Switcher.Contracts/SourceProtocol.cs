@@ -12,4 +12,13 @@ public enum SourceProtocol
 
     [JsonStringEnumMemberName("SRT")]
     Srt,
+
+    [JsonStringEnumMemberName("IMAGE")]
+    Image,
+
+    [JsonStringEnumMemberName("HTML")]
+    Html,
+
+    [JsonStringEnumMemberName("MIX")]
+    Mix,
 }

@@ -45,6 +45,8 @@
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigStore.cs" Link="AppSources\RuntimeConfigStore.cs" />
     <Compile Include="..\..\src\Switcher.App\Display\DisplayConflictEvaluator.cs" Link="AppSources\DisplayConflictEvaluator.cs" />
     <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewRegionModel.cs" Link="AppSources\MultiviewRegionModel.cs" />
+    <Compile Include="..\..\src\Switcher.App\Multiview\CellTally.cs" Link="AppSources\CellTally.cs" />
+    <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewTally.cs" Link="AppSources\MultiviewTally.cs" />
   </ItemGroup>
 
 </Project>

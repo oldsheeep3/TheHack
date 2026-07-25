@@ -22,6 +22,8 @@ public sealed class FakeVideoEngine : IVideoEngine
 
     public event EventHandler<SourceInfo>? SourceStatusChanged;
 
+    public event EventHandler<string>? SourceRemoved;
+
     public Task StartAsync(EngineOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -57,11 +59,24 @@ public sealed class FakeVideoEngine : IVideoEngine
         }
     }
 
+    /// <summary>No real device backend in the fake engine; enumeration is always empty.</summary>
+    public IReadOnlyList<DeviceInfo> QueryDevices(DeviceQueryType type) => [];
+
+    /// <summary>Test helper: the ids handed to <see cref="AddSource(SourceDefinition)"/>, in order — a
+    /// mix has to reach the engine after the sources it references.</summary>
+    public IReadOnlyList<string> AddedSourceIds
+    {
+        get { lock (_gate) { return _addedSourceIds.ToList(); } }
+    }
+
+    private readonly List<string> _addedSourceIds = [];
+
     public void AddSource(SourceDefinition source)
     {
         ArgumentNullException.ThrowIfNull(source);
         lock (_gate)
         {
+            _addedSourceIds.Add(source.Id);
             var channel = _channelById.TryGetValue(source.Id, out var existing) ? existing : AllocateChannelLocked(source.Id);
             var info = new SourceInfo(
                 Channel: channel,
@@ -109,6 +124,8 @@ public sealed class FakeVideoEngine : IVideoEngine
             _enabled.TryRemove((ProgramBus.Pgm1, id), out _);
             _enabled.TryRemove((ProgramBus.Pgm2, id), out _);
         }
+
+        SourceRemoved?.Invoke(this, id);
     }
 
     public bool TryResolveChannel(string id, out int channel)
@@ -145,9 +162,42 @@ public sealed class FakeVideoEngine : IVideoEngine
         // Global TAKE no-op in the fake.
     }
 
+    public void Take(ProgramBus bus, int durationMs) => _lastTake = (bus, durationMs);
+
+    private (ProgramBus Bus, int DurationMs)? _lastTake;
+
+    /// <summary>Test helper: the most recent per-bus TAKE, or <c>null</c> if none has run.</summary>
+    public (ProgramBus Bus, int DurationMs)? LastTake => _lastTake;
+
     public FrameData GetFrame(string target) => EmptyFrame();
 
     public void ApplyMultiview(MultiviewLayout layout) => ArgumentNullException.ThrowIfNull(layout);
+
+    private readonly Dictionary<string, int> _audioMixers = new(StringComparer.Ordinal);
+
+    public void SetSourceAudioMixers(string id, int mixerMask)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        lock (_gate) { _audioMixers[id] = mixerMask; }
+    }
+
+    /// <summary>Test helper: the mask last applied to a source (0 when never set).</summary>
+    public int AudioMixersFor(string id)
+    {
+        lock (_gate) { return _audioMixers.GetValueOrDefault(id); }
+    }
+
+    /// <summary>No real endpoints in the fake.</summary>
+    public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => [];
+
+    public void ApplyAudioOutputs(AudioOutputsRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_gate) { CurrentAudioOutputs = request.Outputs.ToList(); }
+    }
+
+    /// <summary>Test helper: the routing last applied.</summary>
+    public IReadOnlyList<AudioOutputAssignment> CurrentAudioOutputs { get; private set; } = [];
 
     public void ApplyOutputs(OutputsRequest request)
     {
@@ -180,6 +230,18 @@ public sealed class FakeVideoEngine : IVideoEngine
         get { lock (_gate) { return _assignments; } }
     }
 
+    /// <summary>Sinks a test declares as failing to start, keyed by sink. Everything else reports
+    /// running, which is what a machine with the devices present would do.</summary>
+    public HashSet<OutputSink> FailingSinks { get; } = [];
+
+    public IReadOnlyList<OutputStatus> QueryOutputStatus()
+    {
+        lock (_gate)
+        {
+            return [.. _assignments.Select(a => new OutputStatus(a.Sink, a.Source, !FailingSinks.Contains(a.Sink)))];
+        }
+    }
+
     public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId)
     {
         // No native display in the fake.
@@ -205,6 +267,9 @@ public sealed class FakeVideoEngine : IVideoEngine
         SourceType.Ndi => SourceProtocol.Ndi,
         SourceType.Webcam => SourceProtocol.Uvc,
         SourceType.Srt => SourceProtocol.Srt,
+        SourceType.Image => SourceProtocol.Image,
+        SourceType.Html => SourceProtocol.Html,
+        SourceType.Mix => SourceProtocol.Mix,
         _ => SourceProtocol.Uvc,
     };
 }

@@ -54,6 +54,11 @@ public static class OutputsRequestValidator
             }
         }
 
+        if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(request.Outputs)) is { } missing)
+        {
+            errors.Add(missing);
+        }
+
         return errors;
     }
 }

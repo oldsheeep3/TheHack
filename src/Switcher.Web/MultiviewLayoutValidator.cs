@@ -21,6 +21,12 @@ public static class MultiviewLayoutValidator
 {
     private const int CellCount = 16;
     private const int DefaultGridSize = 4;
+
+    /// <summary>Grid bounds the operator UI offers; the API accepts the same range so a layout can round
+    /// trip between them (mirrors <c>MultiviewRegionModel.MinSize</c>/<c>MaxSize</c>).</summary>
+    private const int MinGridSize = 4;
+
+    private const int MaxGridSize = 6;
     private static readonly string[] FixedTokens = ["PGM1", "PGM2", "PVW1", "PVW2", "EMPTY"];
 
     public static IReadOnlyList<string> Validate(MultiviewLayout? layout)
@@ -72,9 +78,11 @@ public static class MultiviewLayoutValidator
         var errors = new List<string>();
 
         var grid = layout.Grid ?? new MultiviewGrid(DefaultGridSize, DefaultGridSize);
-        if (grid.Rows <= 0 || grid.Cols <= 0)
+        if (grid.Rows < MinGridSize || grid.Rows > MaxGridSize || grid.Cols < MinGridSize || grid.Cols > MaxGridSize)
         {
-            errors.Add($"grid must have positive rows and cols (got {grid.Rows}x{grid.Cols}).");
+            errors.Add(
+                $"grid rows and cols must each be between {MinGridSize} and {MaxGridSize} "
+                + $"(got {grid.Rows}x{grid.Cols}).");
             return errors;
         }
 

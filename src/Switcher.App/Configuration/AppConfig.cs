@@ -34,7 +34,8 @@ public sealed record AppConfig(
     int ProjectorDisplayIndex,
     IReadOnlyList<CompositeButtonMapping> CompositeButtonMappings,
     IReadOnlyList<AtemButtonMapping> AtemButtonMappings,
-    int OperatorDisplayIndex = 0)
+    int OperatorDisplayIndex = 0,
+    string? ObsInstallPath = null)
 {
     public static AppConfig CreateDefault() => new(
         AtemIp: "192.168.10.240",

@@ -38,10 +38,10 @@ public sealed class BacklightCalculator
         var reports = new List<HidOutputReport>(moduleMappings.Count);
         foreach (var mapping in moduleMappings)
         {
-            var pgm1Src1 = ResolveContext(mapping.Src1.SourceId, programState.Pgm1SourceIds, previewState.Pvw1SourceIds);
-            var pgm1Src2 = ResolveContext(mapping.Src2.SourceId, programState.Pgm1SourceIds, previewState.Pvw1SourceIds);
-            var pgm2Src1 = ResolveContext(mapping.Src1.SourceId, programState.Pgm2SourceIds, previewState.Pvw2SourceIds);
-            var pgm2Src2 = ResolveContext(mapping.Src2.SourceId, programState.Pgm2SourceIds, previewState.Pvw2SourceIds);
+            var pgm1Src1 = ResolveContext(ProgramBus.Pgm1, mapping.Src1.SourceId, programState.Pgm1SourceIds, previewState.Pvw1SourceIds);
+            var pgm1Src2 = ResolveContext(ProgramBus.Pgm1, mapping.Src2.SourceId, programState.Pgm1SourceIds, previewState.Pvw1SourceIds);
+            var pgm2Src1 = ResolveContext(ProgramBus.Pgm2, mapping.Src1.SourceId, programState.Pgm2SourceIds, previewState.Pvw2SourceIds);
+            var pgm2Src2 = ResolveContext(ProgramBus.Pgm2, mapping.Src2.SourceId, programState.Pgm2SourceIds, previewState.Pvw2SourceIds);
 
             IReadOnlyList<BacklightColor> colors =
             [
@@ -58,14 +58,18 @@ public sealed class BacklightCalculator
     }
 
     private static BacklightSwitchContext ResolveContext(
-        string? sourceId, IReadOnlySet<string> programSourceIds, IReadOnlySet<string> previewSourceIds)
+        ProgramBus bus,
+        string? sourceId,
+        IReadOnlySet<string> programSourceIds,
+        IReadOnlySet<string> previewSourceIds)
     {
         if (sourceId is null)
         {
-            return new BacklightSwitchContext(IsProgram: false, IsPreview: false, IsSelectable: false);
+            return new BacklightSwitchContext(bus, IsProgram: false, IsPreview: false, IsSelectable: false);
         }
 
         return new BacklightSwitchContext(
+            bus,
             IsProgram: programSourceIds.Contains(sourceId),
             IsPreview: previewSourceIds.Contains(sourceId),
             IsSelectable: true);

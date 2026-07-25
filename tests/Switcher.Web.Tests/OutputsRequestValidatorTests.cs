@@ -87,11 +87,35 @@ public class OutputsRequestValidatorTests
         var request = new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null, null),
+            new OutputAssignment(OutputSink.Ndi2, OutputSource.Pgm2, null, null, null, null),
         ]);
 
         var errors = OutputsRequestValidator.Validate(request);
 
         Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_RejectsATableThatLeavesAProgramBusWithNoOutput()
+    {
+        // Both sinks point at PGM1, so PGM2 is being switched but never reaches a device.
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null),
+        ]);
+
+        var errors = OutputsRequestValidator.Validate(request);
+
+        Assert.Contains(errors, e => e.Contains("Pgm2"));
+    }
+
+    [Fact]
+    public void Validate_RejectsAnEmptyOutputTable()
+    {
+        var errors = OutputsRequestValidator.Validate(new OutputsRequest([]));
+
+        Assert.Contains(errors, e => e.Contains("at least one output"));
     }
 
     [Fact]

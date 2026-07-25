@@ -14,11 +14,14 @@ namespace Switcher.Engine;
 /// </summary>
 public sealed class EngineDeviceQueryService : IDeviceQueryService
 {
+    private readonly IVideoEngine _engine;
+
+    public EngineDeviceQueryService(IVideoEngine engine) => _engine = engine;
+
     public Task<IReadOnlyList<DeviceInfo>> EnumerateAsync(DeviceQueryType type, CancellationToken ct = default)
     {
-        // TODO(L-002): enumerate via the native engine (dshow_input / DistroAV source properties).
-        IReadOnlyList<DeviceInfo> devices = [];
-        return Task.FromResult(devices);
+        // Webcam/NDI enumeration is delegated to libobs source-property lists via the native engine.
+        return Task.FromResult(_engine.QueryDevices(type));
     }
 
     public Task<SrtSetupInfo> GetSrtSetupAsync(CancellationToken ct = default)

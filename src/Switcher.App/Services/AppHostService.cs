@@ -56,11 +56,19 @@ public sealed class AppHostService
     public async Task StartAsync()
     {
         _logger.LogInformation("Starting Switcher.App: booting video engine.");
-        await _engine.StartAsync(new EngineOptions()).ConfigureAwait(false);
 
-        // Replay persisted output routing now that the engine's native context exists (the orchestrator
-        // was constructed during DI build, before the engine started, so it defers this from its ctor).
+        // Resolve the installed OBS runtime and feed libobs its core data / plugin paths. Without the core
+        // data path the native engine's obs_reset_video fails ("Native switcher-engine failed to start").
+        var engineOptions = ObsRuntime.Configure(new EngineOptions(), _config.ObsInstallPath, _logger);
+        await _engine.StartAsync(engineOptions).ConfigureAwait(false);
+
+        // Replay persisted state now that the engine's native context exists (the orchestrator was
+        // constructed during DI build, before the engine started, so it defers this from its ctor).
+        // Sources/multiview must be restored before MainWindow is constructed - it seeds its tiles and
+        // multiview cells from the engine and the orchestrator's layout.
         _orchestrator.RestorePersistedOutputs();
+        _orchestrator.RestorePersistedSources();
+        _orchestrator.RestorePersistedAudio();
 
         _logger.LogInformation("Connecting ATEM client to {AtemIp}.", _config.AtemIp);
         _atemController.Connect(_config.AtemIp);

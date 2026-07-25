@@ -51,6 +51,9 @@ public static class ServiceCollectionExtensions
             var orchestrator = sp.GetRequiredService<AppOrchestrator>();
             hidInput.SwitchEdge += orchestrator.HandleSwitchEdge;
             hidInput.VrChanged += orchestrator.HandleVrChanged;
+            // The controller's module_present bitmap is the source of truth for which modules exist:
+            // rows appear when a module is attached and disappear when it is not.
+            hidInput.ModulePresenceChanged += orchestrator.HandleModulePresence;
             return hidInput;
         });
 

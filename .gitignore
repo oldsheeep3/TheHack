@@ -36,3 +36,15 @@ switcher-engine.dll
 # editor history folders (any location)
 **/.history/
 rp2354/
+
+# Bundled OBS runtime is assembled at package time by tools/bundle-obs-runtime.ps1
+obs-runtime/
+
+# Written into the working directory by libobs plugins at runtime: obs-browser's CEF cache and the
+# service/compatibility data win-capture and rtmp-services unpack. Not ours, and rewritten every run.
+/obs-browser/
+/rtmp-services/
+/win-capture/
+
+# Local debug profile: it pins this machine's OBS path into PATH, so it cannot be shared.
+src/Switcher.App/Properties/launchSettings.json
