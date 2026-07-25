@@ -12,9 +12,36 @@ option(SWITCHER_ENGINE_USE_FIND_PACKAGE "Resolve libobs via find_package(libobs)
 
 add_library(switcher-engine SHARED
     src/engine.cpp
+    src/ndi.cpp
+    src/audio_out.cpp
 )
 
 target_include_directories(switcher-engine PUBLIC include)
+
+# --- NDI (headers only) ------------------------------------------------------
+# Native NDI input, so NDI does not need the DistroAV plugin. Only *headers* are involved: the runtime
+# library is resolved with LoadLibrary at startup (Processing.NDI.DynamicLoad.h), so the built DLL runs
+# unchanged on a machine with no NDI installed - the user installs NDI Tools if they want NDI.
+#
+# The headers are vendored in third_party/ndi (they are MIT; see its README), so building needs no NDI
+# SDK install and the source we ship can be rebuilt as-is. Pass -DNDI_INCLUDE_DIR=<path> to compile
+# against a different SDK instead.
+find_path(NDI_INCLUDE_DIR Processing.NDI.Lib.h
+    HINTS
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ndi/include"
+        "$ENV{NDI_SDK_DIR}/Include"
+        "$ENV{ProgramFiles}/NDI/NDI 6 SDK/Include"
+        "$ENV{ProgramFiles}/NDI/NDI 5 SDK/Include"
+    NO_DEFAULT_PATH
+)
+
+if(NDI_INCLUDE_DIR)
+    message(STATUS "switcher-engine: NDI headers at ${NDI_INCLUDE_DIR} (native NDI enabled)")
+    target_include_directories(switcher-engine PRIVATE ${NDI_INCLUDE_DIR})
+    target_compile_definitions(switcher-engine PRIVATE SWITCHER_HAS_NDI)
+else()
+    message(STATUS "switcher-engine: NDI headers not found; native NDI disabled")
+endif()
 
 # --- libobs resolution -------------------------------------------------------
 # Preferred: a libobs CMake package (shipped with OBS dev files / obs-studio build tree).

@@ -45,6 +45,15 @@ SWITCHER_ENGINE_API int engine_add_source(engine_ctx *ctx, const char *id,
                                           const char *type, const char *settings_json);
 SWITCHER_ENGINE_API int engine_remove_source(engine_ctx *ctx, const char *id);
 
+/*
+ * Enumerate selectable input devices for a source kind via libobs source-property lists.
+ *   kind: "WEBCAM"/"UVC" -> dshow_input "video_device_id"; "NDI" -> ndi_source "ndi_source_name".
+ * Returns a UTF-8 JSON array [{"id":"..","name":"..","formats":["WxH",..]|null}], owned by the engine
+ * and valid until the next engine_enumerate_devices call on the same ctx (copy it before then). Returns
+ * "[]" for an unknown kind or when the backing module (e.g. DistroAV for NDI) is not loaded.
+ */
+SWITCHER_ENGINE_API const char *engine_enumerate_devices(engine_ctx *ctx, const char *kind);
+
 /* dual M/E */
 SWITCHER_ENGINE_API void engine_set_preview(engine_ctx *ctx, int bus, const char *source_id);
 SWITCHER_ENGINE_API void engine_set_source_enabled(engine_ctx *ctx, int bus,
@@ -56,6 +65,29 @@ SWITCHER_ENGINE_API void engine_take(engine_ctx *ctx, int bus, int transition_ki
 
 /* outputs / multiview / display */
 SWITCHER_ENGINE_API int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json);
+
+/* --- audio ---------------------------------------------------------------
+ * Each program bus owns one libobs audio track: bus 0 -> track 0, bus 1 -> track 1. A source's
+ * `mixers` bitmask decides which buses hear it (bit 0 = bus 0, bit 1 = bus 1), which is how
+ * AFV/ON/OFF is expressed: the caller recomputes the mask as bus membership changes.
+ */
+SWITCHER_ENGINE_API void engine_set_source_audio(engine_ctx *ctx, const char *id, int mixers);
+
+/* Which sinks from the last engine_apply_outputs are actually egressing:
+ * {"outputs":[{"sink":"VCAM2","source":"PGM2","running":false}, ...]}. An assignment can be accepted
+ * and still never start (no NDI runtime, virtual camera held by another app), so this is how the
+ * caller learns a program bus has no working output. Pointer owned by the engine, valid until the
+ * next call on the same ctx. */
+SWITCHER_ENGINE_API const char *engine_get_output_status(engine_ctx *ctx);
+
+/* Active audio render endpoints as JSON ([{"id","name","is_default"}, ...]). The returned pointer is
+ * owned by the engine and valid until the next call on the same ctx. */
+SWITCHER_ENGINE_API const char *engine_enumerate_audio_devices(engine_ctx *ctx);
+
+/* Routes buses to audio devices: {"outputs":[{"bus":0,"device_id":"..."}, ...]}. A bus may appear more
+ * than once to feed several devices; an empty device_id means the system default endpoint. Replaces
+ * the whole table. Returns 0 on success. */
+SWITCHER_ENGINE_API int engine_apply_audio_outputs(engine_ctx *ctx, const char *assignments_json);
 SWITCHER_ENGINE_API int engine_apply_multiview(engine_ctx *ctx, const char *layout_json);
 SWITCHER_ENGINE_API int engine_start_display(engine_ctx *ctx, const char *target,
                                              void *hwnd, int display_id);

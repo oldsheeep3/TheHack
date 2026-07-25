@@ -17,6 +17,9 @@
 
 #include "engine.h"
 
+#include "audio_out.h"
+#include "ndi.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -32,23 +35,35 @@
 
 #include <obs.h>
 #include <graphics/vec2.h>
+#include <graphics/vec4.h>
+#include <util/platform.h>
 
 namespace {
 
 constexpr int kBusCount = 2;
 constexpr uint64_t kTapMinIntervalNs = 33'000'000;  // ~30 fps upper bound on readback (spec step 7)
 
-// A single preview readback tap: a video_t rendered as BGRA and pumped to the frame callback.
+// A single preview readback tap. The target's source is rendered off-screen into a texrender each frame,
+// copied to a staging surface, and mapped one frame later to hand BGRA pixels to the managed frame
+// callback. This uses only public libobs graphics APIs (obs_add_main_render_callback + gs_texrender +
+// gs_stagesurface), because obs_view/video_output_connect never marks a custom view's mix raw-active
+// (start_raw_video, which does, is not exported), so a bare view tap yields no frames.
 struct Tap {
-    video_t *video = nullptr;       // borrowed (bus/mv view) or owned via `owned_view`
-    obs_view_t *owned_view = nullptr;  // non-null only for lazily-created SRC:<id> taps
-    bool connected = false;
     std::string target;
+    obs_source_t *source = nullptr;   // resolved at enable; bus transition/scene, or the pooled SRC source
+    bool use_source_size = false;     // SRC:<id> reads back at the source's own size; buses use the canvas
+    bool inc_showing = false;         // we called obs_source_inc_showing (async devices need it to capture)
+    gs_texrender_t *texrender = nullptr;
+    gs_stagesurf_t *stage = nullptr;
+    uint32_t sw = 0, sh = 0;          // current stage dimensions
+    bool have_staged = false;         // a frame is staged, ready to map on the next render tick
+    uint64_t last_ns = 0;             // throttle clock (graphics-thread only)
 };
 
 // A live output sink (virtualcam / NDI) bound to a bus program video.
 struct OutputSink {
     obs_output_t *output = nullptr;
+    int bus = 0;  // which program bus this sink carries, for engine_get_output_status
 };
 
 // A fullscreen obs_display rendering a target source to an App window.
@@ -57,17 +72,6 @@ struct DisplayOut {
     obs_source_t *source = nullptr;  // borrowed: transition / preview scene / multiview scene source
     uint32_t base_w = 0;
     uint32_t base_h = 0;
-};
-
-// Per-tap trampoline arg: the video_output_connect callback identifies its engine + target through this.
-// All fields the raw-video trampoline touches live here (not in ctx->taps) so the trampoline can run
-// lock-free - it never takes ctx->lock, which is what lets disconnect run *outside* the lock without a
-// lock-order inversion against libobs' video-output mutex.
-struct TapCbArg {
-    engine_ctx *ctx = nullptr;
-    std::string target;
-    std::atomic<uint64_t> last_ns{0};  // throttle clock, trampoline-owned
-    std::atomic<bool> active{false};   // gate: cleared before disconnect so no callback touches stale state
 };
 
 struct Bus {
@@ -95,12 +99,12 @@ struct engine_ctx {
     obs_view_t *mv_view = nullptr;
     video_t *mv_video = nullptr;
 
-    std::map<std::string, Tap> taps;               // keyed by target token
-    std::map<std::string, TapCbArg *> tap_args;    // trampoline args, keyed by target token
+    std::map<std::string, Tap> taps;               // keyed by target token; mutated only under obs graphics
     std::map<std::string, OutputSink> outputs;     // keyed by sink token (VCAM1/NDI1/...)
     std::map<std::string, DisplayOut> displays;    // keyed by target token
+    bool render_cb_added = false;                  // whether taps_render is registered on the main render
 
-    std::atomic<engine_frame_cb> frame_cb{nullptr};  // read lock-free by the raw-video trampoline
+    std::atomic<engine_frame_cb> frame_cb{nullptr};  // read lock-free by the main-render tap callback
     std::atomic<void *> frame_user{nullptr};
     engine_state_cb state_cb = nullptr;
     void *state_user = nullptr;
@@ -110,7 +114,31 @@ struct engine_ctx {
 
     FILE *log_file = nullptr;
     bool started = false;
+
+    std::string last_enum_json;  // backing store for engine_enumerate_devices' returned pointer
+    std::string last_audio_devices_json;
+    std::string last_output_status_json;
+    std::string last_multiview_json;  // last applied layout, re-applied after a TAKE swaps PVW scenes
 };
+
+// Forward declaration: engine_take re-applies the cached multiview layout, because a region whose
+// content is PVW1/PVW2 holds a scene item pointing at the preview scene the TAKE just swapped out.
+//
+// NOTE(tally frames): drawing the red/green tally outline into the *native* multiview was tried by
+// rebuilding this scene (with a color_source behind each tallied region) on every bus change. Doing
+// scene teardown/rebuild plus private-source create/destroy at bus-change frequency wedges the libobs
+// graphics thread - every tap stops delivering frames and all previews freeze, reproducibly, within a
+// dozen takes. The operator window frames its own multiview cells instead (MultiviewTally); giving the
+// composited multiview output the same frames needs a design that never mutates the scene graph on the
+// hot path (retained per-region colour sources whose settings/visibility are updated in place).
+static int apply_multiview_locked(engine_ctx *ctx, const char *layout_json);
+
+// Re-applies the cached layout. No-op before the first engine_apply_multiview. Must hold ctx->lock.
+static void refresh_multiview_locked(engine_ctx *ctx) {
+    if (ctx->last_multiview_json.empty()) return;
+    const std::string layout = ctx->last_multiview_json;  // copy: apply_multiview_locked rewrites it
+    apply_multiview_locked(ctx, layout.c_str());
+}
 
 // ---------------------------------------------------------------------------
 // small helpers
@@ -132,8 +160,11 @@ const char *map_source_type(const std::string &type) {
     const std::string t = to_upper(type);
     if (t == "WEBCAM" || t == "UVC" || t == "DSHOW") return "dshow_input";     // win-dshow
     if (t == "SRT" || t == "MEDIA" || t == "FFMPEG") return "ffmpeg_source";   // obs-ffmpeg (srt:// ok)
-    if (t == "NDI") return "ndi_source";                                       // DistroAV
+    // NDI: prefer switcher-engine's own receiver (built on the NDI SDK, no plugin required); fall back
+    // to DistroAV's ndi_source when this build has no NDI support but that plugin happens to be present.
+    if (t == "NDI") return ndi_is_available() ? ndi_source_id() : "ndi_source";
     if (t == "IMAGE") return "image_source";
+    if (t == "HTML" || t == "BROWSER") return "browser_source";                // obs-browser (CEF)
     if (t == "COLOR") return "color_source";
     if (t == "TEXT") return "text_gdiplus";
     return nullptr;
@@ -148,8 +179,28 @@ obs_data_t *build_native_settings(const std::string &obs_source_id, const char *
     if (obs_source_id == "dshow_input") {
         const char *dev = in ? obs_data_get_string(in, "device_id") : "";
         if (dev && *dev) obs_data_set_string(out, "video_device_id", dev);
+
+        // WebcamConfig.Format is "<W>x<H>" or "<W>x<H>@<FPS>". win-dshow only honors `resolution` /
+        // `frame_interval` when res_type is Custom (1) - with the default Preferred (0) it opens the
+        // device's *first* advertised media type, which on many UVC cameras is an 8 fps MJPEG/YUY2 mode
+        // (observed: BUFFALO BSWHD06M opening at 1280x720@8). Setting res_type explicitly is what makes
+        // the requested mode take effect. frame_interval is in 100 ns units; 0 = FPS_HIGHEST.
         const char *fmt = in ? obs_data_get_string(in, "format") : "";
-        if (fmt && *fmt) obs_data_set_string(out, "resolution", fmt);  // best-effort (host tunes)
+        if (fmt && *fmt) {
+            std::string spec = fmt;
+            long long interval = 0;  // FPS_HIGHEST
+            const size_t at = spec.find('@');
+            if (at != std::string::npos) {
+                const double fps = std::atof(spec.c_str() + at + 1);
+                if (fps > 0.0) interval = static_cast<long long>(10'000'000.0 / fps + 0.5);
+                spec = spec.substr(0, at);
+            }
+            obs_data_set_int(out, "res_type", 1);  // ResType_Custom
+            obs_data_set_string(out, "resolution", spec.c_str());
+            obs_data_set_int(out, "frame_interval", interval);
+        } else {
+            obs_data_set_int(out, "res_type", 0);  // ResType_Preferred (device default)
+        }
     } else if (obs_source_id == "ffmpeg_source") {
         const char *url = in ? obs_data_get_string(in, "url") : "";
         if (url && *url) obs_data_set_string(out, "input", url);
@@ -159,12 +210,45 @@ obs_data_t *build_native_settings(const std::string &obs_source_id, const char *
             long long latency = obs_data_get_int(in, "latency_ms");
             if (latency > 0) obs_data_set_int(out, "reconnect_delay_sec", 1);
         }
-    } else if (obs_source_id == "ndi_source") {
+    } else if (obs_source_id == "ndi_source" || obs_source_id == "switcher_ndi") {
+        // NdiConfig.source_name is the full NDI name ("MACHINE (Source)"), which is what both our own
+        // receiver and DistroAV connect by; the two plugins just spell the setting key differently.
         const char *name = in ? obs_data_get_string(in, "source_name") : "";
-        if (name && *name) obs_data_set_string(out, "ndi_source_name", name);
+        if (name && *name) {
+            obs_data_set_string(out, obs_source_id == "switcher_ndi" ? "ndi_name" : "ndi_source_name", name);
+        }
     } else if (obs_source_id == "image_source") {
+        // ImageConfig.file_path; "url" is accepted too for the legacy {"url":..} payload.
+        const char *file = in ? obs_data_get_string(in, "file_path") : "";
+        if (!file || !*file) file = in ? obs_data_get_string(in, "url") : "";
+        if (file && *file) obs_data_set_string(out, "file", file);
+        obs_data_set_bool(out, "unload", false);
+    } else if (obs_source_id == "browser_source") {
+        // HtmlConfig -> obs-browser settings. A local .html is passed through `local_file`, not `url`;
+        // obs-browser only reads `local_file` when `is_local_file` is set (and vice versa).
+        const bool is_local = in && obs_data_get_bool(in, "is_local_file");
         const char *url = in ? obs_data_get_string(in, "url") : "";
-        if (url && *url) obs_data_set_string(out, "file", url);
+        obs_data_set_bool(out, "is_local_file", is_local);
+        if (url && *url) obs_data_set_string(out, is_local ? "local_file" : "url", url);
+
+        const long long w = in ? obs_data_get_int(in, "width") : 0;
+        const long long h = in ? obs_data_get_int(in, "height") : 0;
+        obs_data_set_int(out, "width", w > 0 ? w : 1920);
+        obs_data_set_int(out, "height", h > 0 ? h : 1080);
+
+        const long long fps = in ? obs_data_get_int(in, "fps") : 0;
+        if (fps > 0) {
+            obs_data_set_bool(out, "fps_custom", true);
+            obs_data_set_int(out, "fps", fps);
+        }
+
+        const char *css = in ? obs_data_get_string(in, "css") : "";
+        if (css && *css) obs_data_set_string(out, "css", css);
+
+        // Keep the page alive when it is not on a bus: the switcher taps every source for its preview
+        // tile, so shutting the browser down while "not visible" would blank that tile.
+        obs_data_set_bool(out, "shutdown", false);
+        obs_data_set_bool(out, "restart_when_active", false);
     } else if (in) {
         // color/text and forward-compat: pass the raw contract data through unchanged.
         obs_data_apply(out, in);
@@ -272,31 +356,6 @@ int bus_index_from_token(const char *tok) {
     return -1;
 }
 
-// Resolve a tap/display target token to a rendered video_t (creating a SRC:<id> view on demand).
-video_t *resolve_target_video(engine_ctx *ctx, const std::string &target) {
-    std::string t = to_upper(target);
-    if (t == "PGM1") return ctx->buses[0].program_video;
-    if (t == "PGM2") return ctx->buses[1].program_video;
-    if (t == "PVW1") return ctx->buses[0].preview_video;
-    if (t == "PVW2") return ctx->buses[1].preview_video;
-    if (t == "MULTIVIEW") return ctx->mv_video;
-
-    if (target.rfind("SRC:", 0) == 0) {
-        const std::string id = target.substr(4);
-        auto sit = ctx->sources.find(id);
-        if (sit == ctx->sources.end()) return nullptr;
-        auto &tap = ctx->taps[target];  // reuse existing owned_view if present
-        if (!tap.owned_view) {
-            tap.owned_view = obs_view_create();
-            obs_view_set_source(tap.owned_view, 0, sit->second);
-            tap.video = obs_view_add(tap.owned_view);
-            tap.target = target;
-        }
-        return tap.video;
-    }
-    return nullptr;
-}
-
 obs_source_t *resolve_target_source(engine_ctx *ctx, const std::string &target) {
     std::string t = to_upper(target);
     if (t == "PGM1") return ctx->buses[0].transition;
@@ -311,25 +370,99 @@ obs_source_t *resolve_target_source(engine_ctx *ctx, const std::string &target) 
     return nullptr;
 }
 
-// Runs on the libobs video thread. Lock-free by construction: it reads only the arg's own atomics and
-// ctx fields that are immutable after startup (canvas_w/h) or atomic (frame_cb/frame_user). It must not
-// take ctx->lock, or teardown/tap-toggle (which disconnect while historically holding ctx->lock) would
-// invert lock order against the video-output mutex libobs holds while dispatching here.
-void on_raw_video_trampoline(void *param, struct video_data *frame) {
-    auto *arg = static_cast<TapCbArg *>(param);
-    if (!frame || !frame->data[0]) return;
-    if (!arg->active.load(std::memory_order_acquire)) return;
+// Re-point everything that caches a *scene object* for one bus after engine_take swapped
+// program_scene/preview_scene. Taps and obs_display draw callbacks resolved their obs_source_t once, at
+// enable time, so without this the PVW1/PVW2 readback (multiview cells, UI preview) and any PVW display
+// keep rendering the scene that TAKE just promoted to program - i.e. PVW shows PGM's pixels.
+// Mutating them inside obs_enter_graphics parks the graphics thread, so taps_render / display_draw can
+// never observe a half-updated pointer. Must be called while holding ctx->lock.
+void rebind_bus_targets_locked(engine_ctx *ctx, int bus) {
+    if (bus < 0 || bus >= kBusCount) return;
+    const std::string pvw_key = (bus == 0) ? "PVW1" : "PVW2";
+    const std::string pgm_key = (bus == 0) ? "PGM1" : "PGM2";
+    obs_source_t *pvw_src = obs_scene_get_source(ctx->buses[bus].preview_scene);
+    obs_source_t *pgm_src = ctx->buses[bus].transition;  // unchanged by TAKE, but kept in sync for clarity
 
-    const uint64_t last = arg->last_ns.load(std::memory_order_relaxed);
-    if (last != 0 && frame->timestamp - last < kTapMinIntervalNs) return;
-    arg->last_ns.store(frame->timestamp, std::memory_order_relaxed);
+    obs_enter_graphics();
+    auto tap_it = ctx->taps.find(pvw_key);
+    if (tap_it != ctx->taps.end() && tap_it->second.source != pvw_src) {
+        tap_it->second.source = pvw_src;
+        tap_it->second.have_staged = false;  // the staged surface belongs to the old scene
+    }
+    auto disp_it = ctx->displays.find(pvw_key);
+    if (disp_it != ctx->displays.end()) disp_it->second.source = pvw_src;
+    disp_it = ctx->displays.find(pgm_key);
+    if (disp_it != ctx->displays.end()) disp_it->second.source = pgm_src;
+    obs_leave_graphics();
+}
 
-    engine_ctx *ctx = arg->ctx;
+// Release a tap's GPU objects. MUST run inside an obs graphics context (obs_enter_graphics / the render
+// thread), which serializes with taps_render so the objects are never freed mid-use.
+void tap_free_gpu(Tap &t) {
+    if (t.stage) { gs_stagesurface_destroy(t.stage); t.stage = nullptr; }
+    if (t.texrender) { gs_texrender_destroy(t.texrender); t.texrender = nullptr; }
+    t.have_staged = false;
+    t.sw = t.sh = 0;
+}
+
+// obs_add_main_render_callback: runs every frame on the graphics thread inside a live gs context (from
+// render_main_texture). For each active tap it maps the surface staged last tick (1-frame latency avoids
+// a GPU stall), then renders the target source off-screen and stages it for next tick. ctx->taps is only
+// mutated under obs_enter_graphics, which parks the graphics thread, so iterating here needs no extra lock.
+void taps_render(void *param, uint32_t, uint32_t) {
+    auto *ctx = static_cast<engine_ctx *>(param);
     engine_frame_cb cb = ctx->frame_cb.load(std::memory_order_acquire);
     void *user = ctx->frame_user.load(std::memory_order_acquire);
-    if (!cb) return;
-    cb(user, arg->target.c_str(), frame->data[0], static_cast<int>(ctx->canvas_w),
-       static_cast<int>(ctx->canvas_h), static_cast<int>(frame->linesize[0]));
+    const uint64_t now = os_gettime_ns();
+
+    for (auto &[key, t] : ctx->taps) {
+        if (!t.source) continue;
+
+        // 1) Emit the frame staged on the previous tick.
+        if (t.have_staged && t.stage && cb) {
+            uint8_t *data = nullptr;
+            uint32_t linesize = 0;
+            if (gs_stagesurface_map(t.stage, &data, &linesize)) {
+                cb(user, t.target.c_str(), data, static_cast<int>(t.sw), static_cast<int>(t.sh),
+                   static_cast<int>(linesize));
+                gs_stagesurface_unmap(t.stage);
+            }
+            t.have_staged = false;
+        }
+
+        // 2) Throttle the (re)staging to ~kTapMinIntervalNs.
+        if (t.last_ns != 0 && now - t.last_ns < kTapMinIntervalNs) continue;
+
+        uint32_t w = ctx->canvas_w, h = ctx->canvas_h;
+        if (t.use_source_size) {
+            w = obs_source_get_width(t.source);
+            h = obs_source_get_height(t.source);
+            if (w == 0 || h == 0) continue;  // async source hasn't delivered a frame yet
+        }
+
+        if (!t.texrender) t.texrender = gs_texrender_create(GS_BGRA, GS_ZS_NONE);
+        if (!t.stage || t.sw != w || t.sh != h) {
+            if (t.stage) gs_stagesurface_destroy(t.stage);
+            t.stage = gs_stagesurface_create(w, h, GS_BGRA);
+            t.sw = w;
+            t.sh = h;
+            t.have_staged = false;
+        }
+        if (!t.texrender || !t.stage) continue;
+
+        gs_texrender_reset(t.texrender);
+        if (gs_texrender_begin(t.texrender, w, h)) {
+            struct vec4 clear;
+            vec4_zero(&clear);
+            gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+            gs_ortho(0.0f, static_cast<float>(w), 0.0f, static_cast<float>(h), -100.0f, 100.0f);
+            obs_source_video_render(t.source);
+            gs_texrender_end(t.texrender);
+            gs_stage_texture(t.stage, gs_texrender_get_texture(t.texrender));
+            t.have_staged = true;
+            t.last_ns = now;
+        }
+    }
 }
 }  // namespace
 
@@ -361,8 +494,9 @@ engine_ctx *engine_startup(const char *options_json) {
     }
 
     // Parse options_json via libobs' own JSON (no extra dependency). EngineOptions (Switcher.Contracts)
-    // provides canvas_width/height/fps/module_path; the remaining path knobs are read from options_json
-    // if present, else from the environment (managed EngineOptions does not carry them yet - see README).
+    // provides canvas_width/height/fps/module_path plus the path knobs (data_path/module_bin_path/
+    // module_data_path/graphics_module); each is read from options_json if present, else from the
+    // environment (Switcher.App fills them in from the located OBS install - see README).
     obs_data_t *opt = options_json ? obs_data_create_from_json(options_json) : obs_data_create();
     if (!opt) opt = obs_data_create();
     obs_data_set_default_int(opt, "canvas_width", 1920);
@@ -378,7 +512,15 @@ engine_ctx *engine_startup(const char *options_json) {
         const char *e = env_or_null(env_key);
         return e ? std::string(e) : std::string();
     };
-    const std::string data_path = pick("data_path", "SWITCHER_OBS_DATA_PATH");
+    // libobs' obs_find_data_file() concatenates the registered data path and the file name WITHOUT
+    // inserting a separator (see check_path in obs-internal.h: dstr_copy(path); dstr_cat(file)). Its
+    // own built-in paths always end in '/', so a data path we register MUST end in a separator too, or
+    // "<dir>/libobsdefault.effect" is searched and graphics init fails. Normalize to guarantee one.
+    auto with_trailing_sep = [](std::string p) -> std::string {
+        if (!p.empty() && p.back() != '/' && p.back() != '\\') p.push_back('/');
+        return p;
+    };
+    const std::string data_path = with_trailing_sep(pick("data_path", "SWITCHER_OBS_DATA_PATH"));
     const std::string module_bin = pick("module_bin_path", "SWITCHER_OBS_MODULE_BIN");
     const std::string module_data = pick("module_data_path", "SWITCHER_OBS_MODULE_DATA");
     std::string graphics_module = pick("graphics_module", "SWITCHER_OBS_GRAPHICS_MODULE");
@@ -397,6 +539,7 @@ engine_ctx *engine_startup(const char *options_json) {
     // CORE data path MUST be registered before obs_reset_video, otherwise libobs cannot find its built-in
     // effects (default.effect etc.) and graphics init fails - this was the L-001 scaffold's blocker.
     if (!data_path.empty()) obs_add_data_path(data_path.c_str());
+    blog(LOG_INFO, "switcher-engine: data_path='%s' graphics_module='%s'", data_path.c_str(), graphics_module.c_str());
 
     struct obs_video_info ovi = {};
     ovi.graphics_module = graphics_module.c_str();
@@ -410,7 +553,9 @@ engine_ctx *engine_startup(const char *options_json) {
     ovi.colorspace = VIDEO_CS_709;
     ovi.range = VIDEO_RANGE_FULL;
     ovi.scale_type = OBS_SCALE_BICUBIC;
-    if (obs_reset_video(&ovi) != OBS_VIDEO_SUCCESS) {
+    const int reset_rc = obs_reset_video(&ovi);
+    if (reset_rc != OBS_VIDEO_SUCCESS) {
+        blog(LOG_ERROR, "switcher-engine: obs_reset_video failed (code %d)", reset_rc);
         obs_data_release(opt);
         obs_shutdown();
         base_set_log_handler(nullptr, nullptr);
@@ -425,15 +570,62 @@ engine_ctx *engine_startup(const char *options_json) {
     oai.speakers = SPEAKERS_STEREO;
     obs_reset_audio(&oai);
 
-    // Bundled source modules (win-dshow / obs-ffmpeg / image-source / text / DistroAV). A missing module
-    // must not stop startup - obs_load_all_modules tolerates individual failures.
-    if (!module_bin.empty())
-        obs_add_module_path(module_bin.c_str(),
-                            module_data.empty() ? module_bin.c_str() : module_data.c_str());
-    if (!module_path.empty()) obs_add_module_path(module_path.c_str(), module_path.c_str());
-    obs_load_all_modules();
+    // Load ONLY the capture/source/transition modules the switcher needs, by name. An installed OBS's
+    // obs-plugins folder also contains Qt/frontend plugins (frontend-tools, aja-output-ui,
+    // decklink-output-ui, obs-websocket, obs-browser...) whose module_load constructs Qt widgets; loaded
+    // via obs_load_all_modules() in a host process with no QApplication they abort the whole process
+    // ("Must construct a QApplication before a QWidget"). Opening a curated allow-list of headless-safe
+    // plugins keeps sources working (webcam/SRT/media/transitions) without ever touching the UI plugins.
+    // obs-transitions is required: the per-bus M/E TAKE uses the "fade_transition" source it registers.
+    const char *user_plugin_root = env_or_null("APPDATA");
+    static const char *kSourceModules[] = {
+        "win-dshow", "win-capture", "win-wasapi", "obs-ffmpeg", "image-source",
+        "obs-text", "text-freetype2", "obs-transitions", "obs-filters", "vlc-video",
+        "obs-x264", "obs-outputs", "rtmp-services",
+        // obs-browser (HTML sources). Headless-safe on Windows: ENABLE_BROWSER_QT_LOOP is a macOS-only
+        // build flag, so module_load only registers the source type and calls obs_frontend_add_event_callback
+        // (a documented no-op without a frontend). CEF itself starts lazily on the plugin's own manager
+        // thread when the first browser_source is created - no QApplication is ever needed.
+        "obs-browser",
+        "distroav", "obs-ndi",  // NDI (DistroAV) - optional; absent in a stock OBS install
+    };
+    if (!module_bin.empty()) {
+        const std::string bin = with_trailing_sep(module_bin);
+        const std::string mdata = with_trailing_sep(module_data.empty() ? module_bin : module_data);
+        int loaded = 0;
+        for (const char *name : kSourceModules) {
+            obs_module_t *mod = nullptr;
+            std::string dll = bin + name + ".dll";
+            std::string ddir = mdata + name;
+            bool ok = obs_open_module(&mod, dll.c_str(), ddir.c_str()) == MODULE_SUCCESS && obs_init_module(mod);
+
+            // Third-party plugins (notably DistroAV/obs-ndi) often install per-user rather than into the
+            // OBS program folder, at %APPDATA%\obs-studio\plugins\<name>\bin\64bit\<name>.dll with data
+            // alongside. Try that layout too before declaring the plugin absent.
+            if (!ok && user_plugin_root) {
+                mod = nullptr;
+                dll = std::string(user_plugin_root) + "\\obs-studio\\plugins\\" + name + "\\bin\\64bit\\" + name + ".dll";
+                ddir = std::string(user_plugin_root) + "\\obs-studio\\plugins\\" + name + "\\data";
+                ok = obs_open_module(&mod, dll.c_str(), ddir.c_str()) == MODULE_SUCCESS && obs_init_module(mod);
+            }
+
+            if (ok) ++loaded;
+        }
+        blog(LOG_INFO, "switcher-engine: loaded %d/%d source modules from '%s'",
+             loaded, static_cast<int>(sizeof(kSourceModules) / sizeof(kSourceModules[0])), bin.c_str());
+    }
+    // A caller-supplied custom module dir (EngineOptions.ModulePath) is trusted to hold only non-UI
+    // source plugins, so it is still loaded wholesale.
+    if (!module_path.empty()) {
+        obs_add_module_path(module_path.c_str(), module_path.c_str());
+        obs_load_all_modules();
+    }
     obs_post_load_modules();
     obs_data_release(opt);
+
+    // Native NDI receiver. Registered after the modules so that if DistroAV *is* installed both source
+    // types exist and map_source_type can prefer ours.
+    ndi_register_source();
 
     // Multiview composite scene/view/video.
     ctx->mv_scene = obs_scene_create_private("mv");
@@ -467,32 +659,22 @@ engine_ctx *engine_startup(const char *options_json) {
 void engine_shutdown(engine_ctx *ctx) {
     if (!ctx) return;
 
-    // Phase 1: stop readback. Snapshot each tap's (video, arg, owned_view) under the lock and clear the
-    // active gate, then release the lock and do the actual video_output_disconnect OUTSIDE it. disconnect
-    // is synchronous (libobs holds its video-output mutex until any in-flight trampoline returns), so once
-    // it returns no callback can touch the arg - only then is it safe to destroy the owned view its video
-    // belongs to and free the arg. Running disconnect under ctx->lock would invert lock order (see ①).
-    struct TapTeardown { video_t *video; TapCbArg *arg; obs_view_t *owned_view; };
-    std::vector<TapTeardown> teardown;
+    // Phase 1: stop readback. Remove the main-render callback first (it blocks until any in-flight
+    // taps_render iteration finishes and prevents further calls), then free each tap's GPU objects inside
+    // a graphics context and dec_showing the sources we showed. Sources themselves are released below,
+    // after the taps that reference them are gone.
     {
         std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-        for (auto &[target, tap] : ctx->taps) {
-            auto ait = ctx->tap_args.find(target);
-            TapCbArg *arg = (ait != ctx->tap_args.end()) ? ait->second : nullptr;
-            if (arg) arg->active.store(false, std::memory_order_release);
-            teardown.push_back({tap.connected ? tap.video : nullptr, arg, tap.owned_view});
+        if (ctx->render_cb_added) {
+            obs_remove_main_render_callback(taps_render, ctx);
+            ctx->render_cb_added = false;
         }
+        obs_enter_graphics();
+        for (auto &[target, tap] : ctx->taps) tap_free_gpu(tap);
+        obs_leave_graphics();
+        for (auto &[target, tap] : ctx->taps)
+            if (tap.inc_showing && tap.source) obs_source_dec_showing(tap.source);
         ctx->taps.clear();
-        ctx->tap_args.clear();
-    }
-    for (auto &t : teardown) {
-        if (t.video && t.arg) video_output_disconnect(t.video, on_raw_video_trampoline, t.arg);
-        if (t.owned_view) {
-            obs_view_set_source(t.owned_view, 0, nullptr);
-            obs_view_remove(t.owned_view);
-            obs_view_destroy(t.owned_view);
-        }
-        delete t.arg;
     }
 
     {
@@ -546,7 +728,9 @@ void engine_shutdown(engine_ctx *ctx) {
         ctx->sources.clear();
     }
 
-    obs_shutdown();
+    audio_out_shutdown();  // stops render threads + raw-audio callbacks before the audio subsystem goes
+    obs_shutdown();  // destroys any remaining sources, so NDI receivers are stopped before we unload it
+    ndi_shutdown();
     g_log_file = nullptr;
     if (ctx->log_file) std::fclose(ctx->log_file);
     delete ctx;
@@ -556,9 +740,111 @@ void engine_shutdown(engine_ctx *ctx) {
 // shared source pool
 // ---------------------------------------------------------------------------
 
+// Build (or rebuild) a MIX source's scene from its layer list. A mix is a private obs_scene, so the
+// rest of the engine needs no special case: a scene *is* an obs_source, which means a mix can be mounted
+// on a bus, tapped for preview, or dropped into a multiview cell exactly like a camera.
+//
+// Members are looked up in the shared source pool, so a source inside a mix is the same instance that is
+// usable on its own elsewhere - libobs opens each device once and every scene item just references it.
+static void build_mix_scene_locked(engine_ctx *ctx, const std::string &id, obs_scene_t *scene,
+                                   const char *settings_json) {
+    clear_scene(scene);
+
+    obs_data_t *cfg = settings_json ? obs_data_create_from_json(settings_json) : nullptr;
+    if (!cfg) return;
+
+    uint32_t canvas_w = static_cast<uint32_t>(obs_data_get_int(cfg, "canvas_width"));
+    uint32_t canvas_h = static_cast<uint32_t>(obs_data_get_int(cfg, "canvas_height"));
+    if (canvas_w == 0) canvas_w = ctx->canvas_w;
+    if (canvas_h == 0) canvas_h = ctx->canvas_h;
+
+    struct LayerRec { std::string id; long long x, y, w, h, z; obs_data_t *crop; };
+    std::vector<LayerRec> layers;
+
+    obs_data_array_t *arr = obs_data_get_array(cfg, "layers");
+    const size_t n = arr ? obs_data_array_count(arr) : 0;
+    for (size_t i = 0; i < n; ++i) {
+        obs_data_t *l = obs_data_array_item(arr, i);
+        const char *sid = obs_data_get_string(l, "source_id");
+        layers.push_back({sid ? sid : "",
+                          obs_data_get_int(l, "x_position"), obs_data_get_int(l, "y_position"),
+                          obs_data_get_int(l, "width"), obs_data_get_int(l, "height"),
+                          obs_data_get_int(l, "z_order"),
+                          obs_data_get_obj(l, "crop")});
+        obs_data_release(l);
+    }
+    if (arr) obs_data_array_release(arr);
+
+    std::stable_sort(layers.begin(), layers.end(),
+                     [](const LayerRec &a, const LayerRec &b) { return a.z < b.z; });
+
+    for (auto &layer : layers) {
+        // Skip self-reference outright; libobs rejects deeper cycles itself (obs_scene_add returns null
+        // when adding a source would make it its own descendant).
+        if (layer.id.empty() || layer.id == id) {
+            if (layer.crop) obs_data_release(layer.crop);
+            continue;
+        }
+
+        auto sit = ctx->sources.find(layer.id);
+        if (sit == ctx->sources.end()) {
+            if (layer.crop) obs_data_release(layer.crop);
+            continue;
+        }
+
+        obs_sceneitem_t *item = obs_scene_add(scene, sit->second);
+        if (!item) {
+            if (layer.crop) obs_data_release(layer.crop);
+            continue;
+        }
+
+        if (layer.crop) {
+            struct obs_sceneitem_crop c = {};
+            c.left = static_cast<int>(obs_data_get_int(layer.crop, "left"));
+            c.top = static_cast<int>(obs_data_get_int(layer.crop, "top"));
+            c.right = static_cast<int>(obs_data_get_int(layer.crop, "right"));
+            c.bottom = static_cast<int>(obs_data_get_int(layer.crop, "bottom"));
+            obs_sceneitem_set_crop(item, &c);
+            obs_data_release(layer.crop);
+        }
+
+        struct vec2 pos, bounds;
+        vec2_set(&pos, static_cast<float>(layer.x), static_cast<float>(layer.y));
+        vec2_set(&bounds,
+                 static_cast<float>(layer.w > 0 ? layer.w : canvas_w),
+                 static_cast<float>(layer.h > 0 ? layer.h : canvas_h));
+        obs_sceneitem_set_alignment(item, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+        obs_sceneitem_set_bounds_alignment(item, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+        obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_SCALE_INNER);
+        obs_sceneitem_set_bounds(item, &bounds);
+        obs_sceneitem_set_pos(item, &pos);
+    }
+
+    obs_data_release(cfg);
+}
+
 int engine_add_source(engine_ctx *ctx, const char *id, const char *type, const char *settings_json) {
     if (!ctx || !id || !type) return 1;
     std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+
+    // MIX has no backing obs source type: it *is* a scene of other pooled sources.
+    if (to_upper(type) == "MIX") {
+        auto it = ctx->sources.find(id);
+        obs_scene_t *scene = it != ctx->sources.end() ? obs_scene_from_source(it->second) : nullptr;
+
+        if (it != ctx->sources.end() && !scene) return 4;  // id already taken by a non-mix source
+
+        if (!scene) {
+            scene = obs_scene_create_private(id);
+            if (!scene) return 3;
+            // The scene object owns the reference the pool hands back on removal; obs_scene_get_source
+            // borrows, and releasing the source releases the scene.
+            ctx->sources[id] = obs_scene_get_source(scene);
+        }
+
+        build_mix_scene_locked(ctx, id, scene, settings_json);
+        return 0;
+    }
 
     const char *obs_id = map_source_type(type);
     if (!obs_id) return 2;  // unknown contract source type
@@ -576,6 +862,11 @@ int engine_add_source(engine_ctx *ctx, const char *id, const char *type, const c
     obs_source_t *src = obs_source_create(obs_id, id, settings, nullptr);
     obs_data_release(settings);
     if (!src) return 3;
+
+    // Silent until the App assigns a mask (engine_set_source_audio): adding a source must never put
+    // audio on air by itself.
+    obs_source_set_audio_mixers(src, 0);
+
     ctx->sources[id] = src;  // pool holds the single reference; scene items add their own
     return 0;
 }
@@ -583,42 +874,101 @@ int engine_add_source(engine_ctx *ctx, const char *id, const char *type, const c
 int engine_remove_source(engine_ctx *ctx, const char *id) {
     if (!ctx || !id) return 1;
 
-    // Drop any SRC:<id> tap that referenced it. Snapshot the disconnect under the lock (clearing the gate
-    // and unhooking the maps so nothing else finds it), then disconnect + tear down the owned view + free
-    // the arg OUTSIDE the lock - same lock-order/UAF discipline as engine_shutdown (see ①).
+    // Tear down the SRC:<id> readback tap first (frees its GPU objects + dec_showing under a graphics
+    // context, so taps_render can no longer touch this source), then release the pooled source.
     const std::string tap_key = std::string("SRC:") + id;
-    video_t *disconnect_video = nullptr;
-    obs_view_t *owned_view = nullptr;
-    TapCbArg *arg = nullptr;
-    {
-        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+    engine_set_tap(ctx, tap_key.c_str(), 0);
 
-        auto tit = ctx->taps.find(tap_key);
-        if (tit != ctx->taps.end()) {
-            auto ait = ctx->tap_args.find(tap_key);
-            if (ait != ctx->tap_args.end()) arg = ait->second;
-            if (arg) arg->active.store(false, std::memory_order_release);
-            if (tit->second.connected) disconnect_video = tit->second.video;
-            owned_view = tit->second.owned_view;
-            ctx->taps.erase(tit);
-            if (ait != ctx->tap_args.end()) ctx->tap_args.erase(ait);
-        }
-
-        auto it = ctx->sources.find(id);
-        if (it != ctx->sources.end()) {
-            obs_source_release(it->second);  // scene items that still reference it keep it alive until removed
-            ctx->sources.erase(it);
-        }
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+    auto it = ctx->sources.find(id);
+    if (it != ctx->sources.end()) {
+        obs_source_release(it->second);  // scene items that still reference it keep it alive until removed
+        ctx->sources.erase(it);
     }
-
-    if (disconnect_video && arg) video_output_disconnect(disconnect_video, on_raw_video_trampoline, arg);
-    if (owned_view) {
-        obs_view_set_source(owned_view, 0, nullptr);
-        obs_view_remove(owned_view);
-        obs_view_destroy(owned_view);
-    }
-    delete arg;
     return 0;
+}
+
+// Append a JSON-quoted, escaped copy of the UTF-8 string s to out.
+static void json_escape_append(const char *s, std::string &out) {
+    out.push_back('"');
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(s ? s : ""); *p; ++p) {
+        switch (*p) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (*p < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", *p);
+                out += buf;
+            } else {
+                out.push_back(static_cast<char>(*p));  // pass UTF-8 bytes through
+            }
+        }
+    }
+    out.push_back('"');
+}
+
+const char *engine_enumerate_devices(engine_ctx *ctx, const char *kind) {
+    if (!ctx) return "[]";
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+
+    const std::string k = kind ? to_upper(kind) : std::string();
+    const char *source_id = nullptr;
+    const char *prop_name = nullptr;
+    if (k == "WEBCAM" || k == "UVC" || k == "DSHOW") {
+        source_id = "dshow_input";
+        prop_name = "video_device_id";
+    } else if (k == "NDI") {
+        // Our own receiver discovers senders through the NDI SDK's finder rather than through an obs
+        // property list, so this path bypasses obs entirely when native NDI is available.
+        if (ndi_is_available()) {
+            std::string out = "[";
+            bool first = true;
+            ndi_append_sources_json(out, first);
+            out += "]";
+            ctx->last_enum_json = std::move(out);
+            blog(LOG_INFO, "switcher-engine: enumerate_devices(NDI) -> %s", ctx->last_enum_json.c_str());
+            return ctx->last_enum_json.c_str();
+        }
+
+        source_id = "ndi_source";        // DistroAV; absent -> obs_get_source_properties returns null
+        prop_name = "ndi_source_name";
+    } else {
+        ctx->last_enum_json = "[]";
+        return ctx->last_enum_json.c_str();
+    }
+
+    std::string out = "[";
+    // Type-level property enumeration: dshow_input / ndi_source populate their device list in
+    // get_properties() without needing a live instance, so no device is opened just to list them.
+    obs_properties_t *props = obs_get_source_properties(source_id);
+    if (props) {
+        obs_property_t *p = obs_properties_get(props, prop_name);
+        if (p && obs_property_get_type(p) == OBS_PROPERTY_LIST) {
+            const size_t n = obs_property_list_item_count(p);
+            bool first = true;
+            for (size_t i = 0; i < n; ++i) {
+                const char *name = obs_property_list_item_name(p, i);
+                const char *id = obs_property_list_item_string(p, i);
+                if (!id || !*id) continue;  // skip the empty "select a device" placeholder row
+                if (!first) out += ",";
+                first = false;
+                out += "{\"id\":";
+                json_escape_append(id, out);
+                out += ",\"name\":";
+                json_escape_append(name && *name ? name : id, out);
+                out += ",\"formats\":null}";  // per-device format probing is a follow-up; default res works
+            }
+        }
+        obs_properties_destroy(props);
+    }
+    out += "]";
+    ctx->last_enum_json = std::move(out);
+    blog(LOG_INFO, "switcher-engine: enumerate_devices(%s) -> %s", k.c_str(), ctx->last_enum_json.c_str());
+    return ctx->last_enum_json.c_str();
 }
 
 // ---------------------------------------------------------------------------
@@ -766,11 +1116,17 @@ void engine_take(engine_ctx *ctx, int bus, int transition_kind, int duration_ms)
     }
 
     // Swap program<->preview roles so the just-taken scene becomes live and staging continues on the
-    // other. The transition already points at the new program; re-point the preview view to the new
-    // (now-empty) preview scene. Only this bus's transition was touched - ME1/ME2 stay independent.
+    // other (the new preview scene holds what was live, matching hardware-switcher PGM/PVW swap). The
+    // transition already points at the new program; re-point the preview view to the new preview scene.
+    // Only this bus's transition was touched - ME1/ME2 stay independent.
     std::swap(b.program_scene, b.preview_scene);
     std::swap(b.program_id, b.preview_id);
     obs_view_set_source(b.preview_view, 0, obs_scene_get_source(b.preview_scene));
+
+    // Everything else that cached the old preview scene object must follow the swap: readback taps,
+    // obs_displays, and any multiview region whose content token is PVW1/PVW2.
+    rebind_bus_targets_locked(ctx, bus);
+    refresh_multiview_locked(ctx);
 
     emit_state(ctx);
 }
@@ -804,10 +1160,16 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
 
         if (sink == "HDMI") {
             // HDMI is presented via engine_start_display(target, hwnd, display_id) from the App, which
-            // owns the window handle. Nothing to bind here.
+            // owns the window handle. Nothing to bind here - record the assignment so the status query
+            // can report which bus it carries, and let the display's own presence say whether it runs.
+            ctx->outputs[sink] = OutputSink{nullptr, bus};
             obs_data_release(a);
             continue;
         }
+
+        // Native NDI sender (SDK-backed, no plugin); DistroAV's ndi_output only if this build has no
+        // NDI support and that plugin is installed.
+        const char *ndi_out = ndi_is_available() ? ndi_output_id() : "ndi_output";
 
         const char *obs_output_id = nullptr;
         obs_data_t *osettings = obs_data_create();
@@ -816,11 +1178,11 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
             // (see README "Dual virtual camera"). VCAM2 falling through to ndi keeps both buses egressing.
             obs_output_id = "virtualcam_output";
         } else if (sink == "VCAM2") {
-            obs_output_id = "ndi_output";
+            obs_output_id = ndi_out;
             const char *nm = obs_data_get_string(a, "ndi_name");
             obs_data_set_string(osettings, "ndi_name", (nm && *nm) ? nm : "SWITCHER VCAM2");
         } else if (sink == "NDI1" || sink == "NDI2") {
-            obs_output_id = "ndi_output";
+            obs_output_id = ndi_out;
             const char *nm = obs_data_get_string(a, "ndi_name");
             obs_data_set_string(osettings, "ndi_name",
                                 (nm && *nm) ? nm : (sink == "NDI1" ? "SWITCHER PGM1" : "SWITCHER PGM2"));
@@ -830,12 +1192,23 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
             obs_output_t *output = obs_output_create(obs_output_id, sink.c_str(), osettings, nullptr);
             if (output) {
                 obs_output_set_media(output, video, obs_get_audio());
+
+                // Bus n's audio lives on track n (see engine_set_source_audio), so an output carrying
+                // PGM2's picture has to carry PGM2's mix and not track 0's.
+                obs_output_set_mixer(output, static_cast<size_t>(bus));
+
                 if (obs_output_start(output)) {
-                    ctx->outputs[sink] = OutputSink{output};
+                    ctx->outputs[sink] = OutputSink{output, bus};
                 } else {
-                    // NDI plugin absent / device busy: release and skip (graceful, no error to caller).
+                    // Device busy / NDI runtime missing: release and skip (graceful, no error to the
+                    // caller). engine_get_output_status is how the app finds out it never started.
+                    blog(LOG_WARNING, "switcher-engine: output '%s' (%s) failed to start",
+                         sink.c_str(), obs_output_id);
                     obs_output_release(output);
                 }
+            } else {
+                blog(LOG_WARNING, "switcher-engine: output '%s' could not be created ('%s' unavailable)",
+                     sink.c_str(), obs_output_id);
             }
         }
         obs_data_release(osettings);
@@ -849,6 +1222,14 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
 int engine_apply_multiview(engine_ctx *ctx, const char *layout_json) {
     if (!ctx || !layout_json) return 1;
     std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+    return apply_multiview_locked(ctx, layout_json);
+}
+
+// Must be called while holding ctx->lock. Caches the layout so engine_take can re-apply it (see
+// rebind_bus_targets_locked): multiview regions whose content is PVW1/PVW2 hold a scene item pointing at
+// the pre-TAKE preview scene, which the swap turns into the program scene.
+static int apply_multiview_locked(engine_ctx *ctx, const char *layout_json) {
+    ctx->last_multiview_json = layout_json;
 
     obs_data_t *req = obs_data_create_from_json(layout_json);
     if (!req) return 2;
@@ -975,70 +1356,118 @@ void engine_stop_display(engine_ctx *ctx, const char *target) {
 }
 
 // ---------------------------------------------------------------------------
+// audio
+// ---------------------------------------------------------------------------
+
+void engine_set_source_audio(engine_ctx *ctx, const char *id, int mixers) {
+    if (!ctx || !id) return;
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+
+    auto it = ctx->sources.find(id);
+    if (it == ctx->sources.end()) return;
+
+    // Bus n owns libobs audio track n, so the mask the App computes from AFV/ON/OFF maps straight onto
+    // obs' mixer bits - there is no audio-follows-video concept in libobs to fight with.
+    obs_source_set_audio_mixers(it->second, static_cast<uint32_t>(mixers));
+}
+
+const char *engine_get_output_status(engine_ctx *ctx) {
+    if (!ctx) return "[]";
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+
+    // Which sinks are actually egressing, per bus. An assignment can be accepted and still never run -
+    // NDI with no runtime installed, a virtual camera another app already holds - and the operator has
+    // no way to see that from the routing table alone.
+    obs_data_array_t *arr = obs_data_array_create();
+    for (const auto &[sink, out] : ctx->outputs) {
+        const bool running = sink == "HDMI"
+            ? ctx->displays.count(out.bus == 1 ? "PGM2" : "PGM1") > 0
+            : out.output && obs_output_active(out.output);
+
+        obs_data_t *item = obs_data_create();
+        obs_data_set_string(item, "sink", sink.c_str());
+        obs_data_set_string(item, "source", out.bus == 1 ? "PGM2" : "PGM1");
+        obs_data_set_bool(item, "running", running);
+        obs_data_array_push_back(arr, item);
+        obs_data_release(item);
+    }
+
+    obs_data_t *root = obs_data_create();
+    obs_data_set_array(root, "outputs", arr);
+    const char *json = obs_data_get_json(root);
+    ctx->last_output_status_json = json ? json : "{\"outputs\":[]}";
+    obs_data_array_release(arr);
+    obs_data_release(root);
+    return ctx->last_output_status_json.c_str();
+}
+
+const char *engine_enumerate_audio_devices(engine_ctx *ctx) {
+    if (!ctx) return "[]";
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+    ctx->last_audio_devices_json = audio_out_enumerate_devices();
+    return ctx->last_audio_devices_json.c_str();
+}
+
+int engine_apply_audio_outputs(engine_ctx *ctx, const char *assignments_json) {
+    if (!ctx || !assignments_json) return 1;
+
+    // Deliberately NOT under ctx->lock: opening a WASAPI endpoint can block for tens of milliseconds,
+    // and audio routing shares no state with the video graph.
+    return audio_out_apply(assignments_json);
+}
+
+// ---------------------------------------------------------------------------
 // preview readback + state
 // ---------------------------------------------------------------------------
 
 void engine_set_tap(engine_ctx *ctx, const char *target, int enabled) {
     if (!ctx || !target) return;
     const std::string key = target;
+    std::lock_guard<std::recursive_mutex> guard(ctx->lock);
 
-    // Decide the connect/disconnect under the lock, then perform it OUTSIDE the lock. The trampoline is
-    // lock-free; keeping video_output_connect/disconnect off ctx->lock avoids inverting lock order against
-    // libobs' video-output mutex (see ①). The arg is reused across enable/disable cycles (kept in
-    // tap_args) and only freed on remove_source/shutdown, so it stays valid for any late disconnect here.
-    video_t *connect_video = nullptr;
-    video_t *disconnect_video = nullptr;
-    TapCbArg *arg = nullptr;
-    {
-        std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-        if (enabled) {
-            video_t *video = resolve_target_video(ctx, key);
-            if (!video) return;
-            Tap &tap = ctx->taps[key];
-            tap.target = key;
-            tap.video = video;
-            if (tap.connected) return;
+    if (enabled) {
+        obs_source_t *src = resolve_target_source(ctx, key);
+        if (!src) return;
+        const bool is_src = key.rfind("SRC:", 0) == 0;
+        bool do_inc = false;
 
-            // One trampoline arg per target, kept alive for the connection's lifetime.
-            auto ait = ctx->tap_args.find(key);
-            if (ait == ctx->tap_args.end()) {
-                arg = new TapCbArg{ctx, key};
-                ctx->tap_args[key] = arg;
-            } else {
-                arg = ait->second;
+        // Mutate ctx->taps + register the render callback under obs graphics, which parks the graphics
+        // thread so taps_render can't be iterating concurrently.
+        obs_enter_graphics();
+        Tap &t = ctx->taps[key];
+        if (!t.source) {  // fresh tap
+            t.target = key;
+            t.source = src;
+            t.use_source_size = is_src;
+            t.last_ns = 0;
+            if (is_src) { t.inc_showing = true; do_inc = true; }
+            if (!ctx->render_cb_added) {
+                obs_add_main_render_callback(taps_render, ctx);
+                ctx->render_cb_added = true;
             }
-            arg->last_ns.store(0, std::memory_order_relaxed);
-            arg->active.store(true, std::memory_order_release);  // gate open before connect
-            tap.connected = true;
-            connect_video = video;
-        } else {
-            auto it = ctx->taps.find(key);
-            if (it == ctx->taps.end() || !it->second.connected) return;
-            auto ait = ctx->tap_args.find(key);
-            if (ait != ctx->tap_args.end()) arg = ait->second;
-            if (arg) arg->active.store(false, std::memory_order_release);  // gate shut before disconnect
-            disconnect_video = it->second.video;
-            it->second.connected = false;
         }
-    }
+        obs_leave_graphics();
 
-    if (connect_video && arg) {
-        struct video_scale_info conv = {};
-        conv.format = VIDEO_FORMAT_BGRA;  // already BGRA canvas -> no color conversion
-        conv.width = ctx->canvas_w;
-        conv.height = ctx->canvas_h;
-        conv.range = VIDEO_RANGE_FULL;
-        conv.colorspace = VIDEO_CS_709;
-        video_output_connect(connect_video, &conv, on_raw_video_trampoline, arg);
-    }
-    if (disconnect_video && arg) {
-        video_output_disconnect(disconnect_video, on_raw_video_trampoline, arg);
+        // inc_showing outside the graphics context (its show handler may itself enter graphics). Async
+        // capture sources (dshow webcam, ndi_source) only open their device / push frames while showing.
+        if (do_inc) obs_source_inc_showing(src);
+    } else {
+        obs_source_t *shown = nullptr;
+        obs_enter_graphics();
+        auto it = ctx->taps.find(key);
+        if (it != ctx->taps.end()) {
+            if (it->second.inc_showing) shown = it->second.source;
+            tap_free_gpu(it->second);
+            ctx->taps.erase(it);
+        }
+        obs_leave_graphics();
+        if (shown) obs_source_dec_showing(shown);
     }
 }
 
 void engine_set_frame_cb(engine_ctx *ctx, engine_frame_cb cb, void *user) {
     if (!ctx) return;
-    // Stored atomically so the lock-free trampoline reads a consistent cb/user without ctx->lock.
+    // Stored atomically so the main-render tap callback reads a consistent cb/user without ctx->lock.
     ctx->frame_user.store(user, std::memory_order_release);
     ctx->frame_cb.store(cb, std::memory_order_release);
 }
