@@ -43,12 +43,13 @@ public sealed class EndToEndSmokeTests
             new ModuleMapping(0, new ModuleSourceBinding("cam-1", "Assignable"), new ModuleSourceBinding(null, "Assignable")),
         ]));
 
-        // Fake HID input: switch reflection (mount onto PGM2 preview) and a VR nudge.
+        // Fake HID input: switch reflection (loads cam-1 straight onto the PGM2 program bus, per
+        // docs/specs/00-system-overview.md §3) and a VR nudge.
         harness.Orchestrator.HandleSwitchEdge(new SwitchEdgeEvent(0, SwitchId.Pgm2Src1, IsRising: true));
         harness.Orchestrator.HandleVrChanged(new VrChangedEvent(0, VrChannel.Src1, 128));
 
         var finalTally = harness.TallyBroadcaster.LastV2!;
-        Assert.Contains(channel, finalTally.ActivePvw2);
+        Assert.Contains(channel, finalTally.ActivePgm2);
 
         // Backlight send was attempted (best-effort; HidBacklightService.Send throws
         // InvalidOperationException without Start(), which AppOrchestrator must swallow rather than

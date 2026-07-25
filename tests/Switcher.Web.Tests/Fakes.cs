@@ -12,6 +12,7 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     public List<MultiviewLayout> AppliedMultiviews { get; } = [];
     public List<OutputsRequest> AppliedOutputs { get; } = [];
     public List<ModulesRequest> AppliedModules { get; } = [];
+    public List<AudioOutputsRequest> AppliedAudioOutputs { get; } = [];
     public List<AtemConfig> AppliedAtemConfigs { get; } = [];
     public List<AtemCommandRequest> SentAtemCommands { get; } = [];
     public List<PicoNetworkConfig> AppliedPicoNetworkConfigs { get; } = [];
@@ -58,6 +59,12 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default)
+    {
+        AppliedAudioOutputs.Add(request);
+        return Task.CompletedTask;
+    }
+
     public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
     {
         AppliedModules.Add(request);
@@ -100,13 +107,21 @@ internal sealed class FakeInputSourceManager : IVideoEngine
 
     public IReadOnlyList<SourceInfo> GetSources() => _sources;
 
+    public IReadOnlyList<DeviceInfo> QueryDevices(DeviceQueryType type) => [];
+
     public void AddSource(SourceDefinition source) =>
         _sources.Add(new SourceInfo(_sources.Count, source.Name, SourceProtocol.Uvc, null, SourceStatus.Connected, source.Id, _sources.Count));
 
     public void AddSource(int channel, SourceProtocol protocol, string? sourceUrl) =>
         _sources.Add(new SourceInfo(channel, $"ch{channel}", protocol, null, SourceStatus.Connected));
 
-    public void RemoveSource(string id) => _sources.RemoveAll(s => s.Id == id);
+    public void RemoveSource(string id)
+    {
+        _sources.RemoveAll(s => s.Id == id);
+        SourceRemoved?.Invoke(this, id);
+    }
+
+    public event EventHandler<string>? SourceRemoved;
 
     public bool TryResolveChannel(string id, out int channel)
     {
@@ -127,13 +142,23 @@ internal sealed class FakeInputSourceManager : IVideoEngine
 
     public void Take() { }
 
+    public void Take(ProgramBus bus, int durationMs) { }
+
     public FrameData GetFrame(string target) => new(0, 0, ReadOnlyMemory<byte>.Empty);
 
     public void ApplyMultiview(MultiviewLayout layout) { }
 
+    public void SetSourceAudioMixers(string id, int mixerMask) { }
+
+    public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => [];
+
+    public void ApplyAudioOutputs(AudioOutputsRequest request) { }
+
     public void ApplyOutputs(OutputsRequest request) { }
 
     public IReadOnlyList<OutputAssignment> CurrentAssignments => [];
+
+    public IReadOnlyList<OutputStatus> QueryOutputStatus() => [];
 
     public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId) { }
 

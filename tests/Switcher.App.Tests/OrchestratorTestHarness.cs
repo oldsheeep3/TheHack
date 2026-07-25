@@ -19,8 +19,12 @@ namespace Switcher.App.Tests;
 internal sealed class OrchestratorTestHarness : IDisposable
 {
     private readonly string _runtimeConfigDir;
+    private readonly bool _ownsRuntimeConfigDir;
 
-    public OrchestratorTestHarness(AppConfig? config = null)
+    /// <param name="runtimeConfigDir">Reuse an existing harness's <see cref="RuntimeConfigDir"/> to
+    /// simulate an app restart against the same persisted <c>runtime-config.json</c>; the caller then
+    /// owns cleanup of that directory.</param>
+    public OrchestratorTestHarness(AppConfig? config = null, string? runtimeConfigDir = null)
     {
         Config = config ?? AppConfig.CreateDefault();
 
@@ -29,7 +33,8 @@ internal sealed class OrchestratorTestHarness : IDisposable
         TallyBroadcaster = new FakeTallyBroadcaster();
         HidBacklightService = new HidBacklightService();
 
-        _runtimeConfigDir = Path.Combine(Path.GetTempPath(), $"switcher-app-tests-{Guid.NewGuid():N}");
+        _ownsRuntimeConfigDir = runtimeConfigDir is null;
+        _runtimeConfigDir = runtimeConfigDir ?? Path.Combine(Path.GetTempPath(), $"switcher-app-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_runtimeConfigDir);
         RuntimeConfigStore = new RuntimeConfigStore(_runtimeConfigDir, NullLogger.Instance);
 
@@ -57,6 +62,10 @@ internal sealed class OrchestratorTestHarness : IDisposable
 
     public AppOrchestrator Orchestrator { get; }
 
+    /// <summary>Directory holding this harness's <c>runtime-config.json</c>, so a second harness can be
+    /// pointed at it to exercise restore-after-restart.</summary>
+    public string RuntimeConfigDir => _runtimeConfigDir;
+
     /// <summary>Registers a v2 (id-based) source and returns its allocated channel.</summary>
     public int AddTestSource(string id)
     {
@@ -69,6 +78,11 @@ internal sealed class OrchestratorTestHarness : IDisposable
     {
         AtemController.Dispose();
         HidBacklightService.Dispose();
+
+        if (!_ownsRuntimeConfigDir)
+        {
+            return;
+        }
 
         try
         {

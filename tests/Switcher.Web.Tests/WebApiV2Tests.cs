@@ -141,7 +141,7 @@ public class WebApiV2Tests
         var request = new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm1, 1, true, true),
+            new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm2, 1, true, true),
         ]);
         var response = await client.PutAsJsonAsync("/api/v1/outputs", request, ProtocolJsonOptions.Default);
 
