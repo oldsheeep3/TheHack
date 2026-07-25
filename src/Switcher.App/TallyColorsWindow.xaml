@@ -1,0 +1,60 @@
+<Window x:Class="Switcher.App.TallyColorsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Tally colours" Height="520" Width="560"
+        Background="{DynamicResource Surface}" Foreground="{DynamicResource Text}"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+            <TextBlock Text="These colours are used on screen and sent to the controller LEDs"
+                       Style="{StaticResource DockTitle}" />
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceRaised}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="12,10">
+            <DockPanel>
+                <Button Content="Reset to defaults" Click="OnResetClick" HorizontalAlignment="Left" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Cancel" Click="OnCancelClick" MinWidth="90" />
+                    <Button Content="Apply" Click="OnApplyClick" Style="{StaticResource ToolButtonAccent}"
+                            MinWidth="110" Margin="0" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Padding="14">
+            <StackPanel>
+                <TextBlock TextWrapping="Wrap" Style="{StaticResource MonoText}" Margin="0,0,0,14"
+                           Text="The controller holds no palette of its own — it is sent these exact RGB values, so the panel and the screen can never disagree about what is on air." />
+
+                <ItemsControl x:Name="SlotsControl">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource ListRow}" Padding="10,8" Margin="0,0,0,8">
+                                <DockPanel>
+                                    <!-- Swatch doubles as the LED preview: this is literally what the module shows. -->
+                                    <Border Width="56" Height="40" CornerRadius="4" DockPanel.Dock="Left"
+                                            Background="{Binding Preview}" BorderBrush="{DynamicResource LineStrong}"
+                                            BorderThickness="1" Margin="0,0,12,0" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" FontSize="13" />
+                                        <TextBlock Text="{Binding Hint}" Style="{StaticResource MonoText}" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <TextBlock Text="R" Style="{StaticResource MicroLabel}" Margin="0,0,4,0" />
+                                            <TextBox Text="{Binding R, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="52" Margin="0,0,10,0" />
+                                            <TextBlock Text="G" Style="{StaticResource MicroLabel}" Margin="0,0,4,0" />
+                                            <TextBox Text="{Binding G, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="52" Margin="0,0,10,0" />
+                                            <TextBlock Text="B" Style="{StaticResource MicroLabel}" Margin="0,0,4,0" />
+                                            <TextBox Text="{Binding B, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="52" Margin="0,0,10,0" />
+                                            <Button Content="Pick..." Click="OnPickClick" Tag="{Binding}" Padding="8,2" FontSize="11" Margin="0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

@@ -39,7 +39,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     private readonly AtemController _atemController;
     private readonly ITallyBroadcaster _tallyBroadcaster;
     private readonly HidBacklightService _hidBacklightService;
-    private readonly BacklightCalculator _backlightCalculator = new();
+    private BacklightCalculator _backlightCalculator = new();
     private readonly RuntimeConfigStore _runtimeConfigStore;
     private readonly AppConfig _config;
     private readonly ILogger<AppOrchestrator> _logger;
@@ -66,6 +66,11 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         [ProgramBus.Pgm1] = [],
         [ProgramBus.Pgm2] = [],
     };
+
+    // The definition each id was created from, kept so a source whose device was busy/absent at creation
+    // can be re-applied later (see ReconnectSourceAsync) - IVideoEngine only reports SourceInfo, not the
+    // device/URL settings a re-open needs.
+    private readonly Dictionary<string, SourceDefinition> _sourceDefinitions = new(StringComparer.Ordinal);
 
     private IReadOnlyList<ModuleMapping> _moduleMappings = [];
     private Dictionary<(string ControllerId, int ButtonId), AtemCommandMapping> _atemMappingTable = new();
@@ -107,13 +112,78 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     /// </summary>
     public void RestorePersistedOutputs()
     {
+        var outputs = _runtimeConfig.OutputAssignments;
+
+        // A table saved before every-bus-needs-an-output was enforced can leave PGM2 with nowhere to go.
+        // Coming up on the defaults is better than coming up with a dead program bus, and the operator
+        // can re-route from the Outputs dock either way.
+        if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(outputs)) is { } missing)
+        {
+            _logger.LogWarning("{Problem} Falling back to the default output routing.", missing);
+            outputs = OutputDefaults.Default;
+            lock (_stateLock)
+            {
+                SaveRuntimeConfigLocked(_runtimeConfig with { OutputAssignments = outputs });
+            }
+        }
+
         try
         {
-            _engine.ApplyOutputs(new OutputsRequest(_runtimeConfig.OutputAssignments));
+            _engine.ApplyOutputs(new OutputsRequest(outputs));
+            WarnAboutDeadBuses();
         }
         catch (ArgumentException ex)
         {
             _logger.LogWarning(ex, "Persisted output assignments were invalid; keeping engine defaults.");
+        }
+    }
+
+    /// <summary>
+    /// Re-creates the persisted input sources on the engine and re-applies the persisted multiview
+    /// layout, so a restart comes back with the same inputs and the same cell arrangement. Runs in the
+    /// same post-<see cref="IVideoEngine.StartAsync"/> step as <see cref="RestorePersistedOutputs"/>,
+    /// and before the operator window is built so its tiles/cells populate from the restored state.
+    ///
+    /// A source whose device is gone (unplugged webcam, deleted image file) fails to create; it is
+    /// logged and skipped rather than dropped from the config, so plugging the device back in and
+    /// pressing Reconnect restores it without re-adding it by hand.
+    /// </summary>
+    public void RestorePersistedSources()
+    {
+        List<SourceDefinition> sources;
+        lock (_stateLock)
+        {
+            // Mixes reference other sources by id, and the native layer can only wire up members that
+            // already exist, so restore every plain source before any mix regardless of the order they
+            // happen to sit in the config file.
+            sources = [.. _runtimeConfig.SourceList.OrderBy(s => s.Type == SourceType.Mix ? 1 : 0)];
+            foreach (var source in sources)
+            {
+                _sourceDefinitions[source.Id] = source;
+            }
+        }
+
+        foreach (var source in sources)
+        {
+            try
+            {
+                _engine.AddSource(source);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                _logger.LogWarning(
+                    ex, "Could not restore persisted source {SourceId} ({Type}); it stays configured but disconnected.",
+                    source.Id, source.Type);
+            }
+        }
+
+        try
+        {
+            _engine.ApplyMultiview(CurrentMultiviewLayout);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Could not restore the persisted multiview layout onto the engine.");
         }
     }
 
@@ -166,6 +236,12 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         lock (_stateLock)
         {
             _engine.AddSource(source);
+            _sourceDefinitions[source.Id] = source;
+            PersistSourcesLocked();
+
+            // An ON source has to be audible the moment it exists, and an AFV one has to start silent.
+            // Waiting for the next bus change would leave either in the wrong state.
+            RefreshSourceAudioLocked();
         }
 
         return Task.CompletedTask;
@@ -177,10 +253,36 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         lock (_stateLock)
         {
-            _engine.AddSource(source with { Id = id });
+            var updated = source with { Id = id };
+            _engine.AddSource(updated);
+            _sourceDefinitions[id] = updated;
+            PersistSourcesLocked();
+            RefreshSourceAudioLocked();  // the audio mode may have changed
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>Re-applies a source's definition to the engine so it re-opens its device. A capture
+    /// device that was busy or unplugged when the source was created (e.g. a second source bound to a
+    /// webcam another source already held) never retries on its own, leaving a permanently disconnected
+    /// tile with no recovery path short of restarting the app.</summary>
+    /// <returns><c>false</c> when the id has no remembered definition (legacy channel-based sources).</returns>
+    public Task<bool> ReconnectSourceAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        lock (_stateLock)
+        {
+            if (!_sourceDefinitions.TryGetValue(id, out var definition))
+            {
+                return Task.FromResult(false);
+            }
+
+            _engine.AddSource(definition);
+        }
+
+        return Task.FromResult(true);
     }
 
     public Task RemoveSourceAsync(string id, CancellationToken cancellationToken = default)
@@ -194,6 +296,8 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
             _engine.SetSourceEnabled(ProgramBus.Pgm1, id, enabled: false);
             _engine.SetSourceEnabled(ProgramBus.Pgm2, id, enabled: false);
             _engine.RemoveSource(id);
+            _sourceDefinitions.Remove(id);
+            PersistSourcesLocked();
 
             foreach (var bus in _previewSourceIds.Keys)
             {
@@ -219,11 +323,19 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
                 .Select(layer => layer.SourceId)
                 .Where(id => _engine.TryResolveChannel(id, out _))
                 .ToHashSet();
-            _previewSourceIds[request.Bus] = resolvedIds;
 
             if (request.Take)
             {
-                _programSourceIds[request.Bus] = [.. resolvedIds];
+                // The native engine stages the layers onto the preview scene and then swaps the bus's
+                // program/preview scenes, so after a TAKE the *previous* program composition is what sits
+                // on PVW (hardware-switcher behaviour). Mirror that swap here or the broadcast tally and
+                // the module backlights keep reporting the just-taken sources as still staged.
+                _previewSourceIds[request.Bus] = _programSourceIds[request.Bus];
+                _programSourceIds[request.Bus] = resolvedIds;
+            }
+            else
+            {
+                _previewSourceIds[request.Bus] = resolvedIds;
             }
 
             RecomputeAndPublishV2Locked();
@@ -232,12 +344,100 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    /// <summary>Takes PVW→PGM on a single bus (<paramref name="durationMs"/> 0 = CUT, &gt;0 = AUTO fade),
+    /// mirroring the native program/preview scene swap into the shadow state that drives tally and
+    /// module backlights. The other bus is untouched.</summary>
+    public Task TakeAsync(ProgramBus bus, int durationMs = 0, CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            _engine.Take(bus, durationMs);
+            (_programSourceIds[bus], _previewSourceIds[bus]) = (_previewSourceIds[bus], _programSourceIds[bus]);
+            RecomputeAndPublishV2Locked();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The definition a source was created from, or <c>null</c> for an id that was never added
+    /// through this orchestrator (legacy channel sources). Used by the mix editor to reload a mix's
+    /// layers, which <see cref="IVideoEngine"/> does not report back.</summary>
+    public SourceDefinition? GetSourceDefinition(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        lock (_stateLock) { return _sourceDefinitions.GetValueOrDefault(id); }
+    }
+
+    /// <summary>Snapshot of the source ids currently live on <paramref name="bus"/>'s program output,
+    /// including the members of any mix on that bus (see <see cref="ExpandMixMembersLocked"/>).</summary>
+    public IReadOnlySet<string> GetProgramSourceIds(ProgramBus bus)
+    {
+        lock (_stateLock) { return ExpandMixMembersLocked(_programSourceIds[bus]); }
+    }
+
+    /// <summary>Snapshot of the source ids currently staged on <paramref name="bus"/>'s preview,
+    /// including the members of any staged mix.</summary>
+    public IReadOnlySet<string> GetPreviewSourceIds(ProgramBus bus)
+    {
+        lock (_stateLock) { return ExpandMixMembersLocked(_previewSourceIds[bus]); }
+    }
+
+    /// <summary>
+    /// Expands a bus membership set to include everything a mix on that bus is showing, recursively.
+    ///
+    /// A camera inside a live mix <em>is</em> on air — its pixels are being broadcast — so tally must say
+    /// so. Without this the operator sees the mix lit red while the camera feeding it looks idle, and the
+    /// talent in front of that camera gets no tally light at all, which is the one thing a tally system
+    /// exists to prevent.
+    ///
+    /// Must be called while holding <see cref="_stateLock"/>.
+    /// </summary>
+    private HashSet<string> ExpandMixMembersLocked(IEnumerable<string> ids)
+    {
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(ids);
+
+        while (pending.Count > 0)
+        {
+            var id = pending.Pop();
+            if (!expanded.Add(id))
+            {
+                continue;  // already visited; also breaks any cycle a config could describe
+            }
+
+            if (_sourceDefinitions.TryGetValue(id, out var definition) && definition.Mix is { } mix)
+            {
+                foreach (var layer in mix.Layers)
+                {
+                    pending.Push(layer.SourceId);
+                }
+            }
+        }
+
+        return expanded;
+    }
+
     public Task ApplyMultiviewAsync(MultiviewLayout layout, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
         lock (_stateLock)
         {
+            // Push the layout to the engine as well as persisting it: the native multiview scene is what
+            // the full-screen multiview window and any MULTIVIEW-targeted display render. Without this,
+            // the layout only ever reached the engine when MultiviewFullscreenWindow opened, so every
+            // merge/split/cell change made afterwards was invisible on the multiview output.
+            try
+            {
+                _engine.ApplyMultiview(layout);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Engine not started yet (layout replayed during startup) - persistence still applies and
+                // MultiviewFullscreenWindow re-applies on attach.
+                _logger.LogWarning(ex, "Could not push the multiview layout to the engine; persisting only.");
+            }
+
             SaveRuntimeConfigLocked(_runtimeConfig with
             {
                 MultiviewCells = layout.Cells,
@@ -254,13 +454,47 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Guarded here as well as in the Web validator, because the operator window applies outputs
+        // directly and must not be able to leave a program bus going nowhere.
+        if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(request.Outputs)) is { } missing)
+        {
+            throw new ArgumentException(missing, nameof(request));
+        }
+
         lock (_stateLock)
         {
             _engine.ApplyOutputs(request);
             SaveRuntimeConfigLocked(_runtimeConfig with { OutputAssignments = _engine.CurrentAssignments });
         }
 
+        WarnAboutDeadBuses();
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>Program buses whose sinks are all assigned but none running — an NDI sink with no NDI
+    /// runtime installed, a virtual camera another application holds. Empty when everything egresses.
+    /// An HDMI-only bus reads as dead until its fullscreen window is opened, which is true.</summary>
+    public IReadOnlyList<OutputSource> BusesWithoutRunningOutput()
+    {
+        try
+        {
+            return OutputRules.BusesWithoutRunningOutput(_engine.QueryOutputStatus());
+        }
+        catch (InvalidOperationException)
+        {
+            return [];  // engine not started yet
+        }
+    }
+
+    private void WarnAboutDeadBuses()
+    {
+        foreach (var bus in BusesWithoutRunningOutput())
+        {
+            _logger.LogWarning(
+                "{Bus} has outputs assigned but none of them started. Check the NDI runtime and whether "
+                + "another application is holding the virtual camera.", bus);
+        }
     }
 
     public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
@@ -274,6 +508,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
             RecomputeAndPublishV2Locked();
         }
 
+        ModulesChanged?.Invoke(this, CurrentModuleMappings);
         return Task.CompletedTask;
     }
 
@@ -377,14 +612,20 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
                 return;
             }
 
+            // A module switch loads the source straight onto the PROGRAM bus
+            // (docs/specs/00-system-overview.md §3: "各ソースを PGM1／PGM2 のどちらのプログラムバスに
+            // 載せるかを直接トグルする"), which is exactly what engine_set_source_enabled does natively -
+            // it mounts the item on the live program scene. Recording it as preview state (as this did)
+            // made the tally broadcast and the module backlight report PVW/green for a source whose
+            // pixels were already on air.
             _engine.SetSourceEnabled(bus, sourceId, edge.IsRising);
             if (edge.IsRising)
             {
-                _previewSourceIds[bus].Add(sourceId);
+                _programSourceIds[bus].Add(sourceId);
             }
             else
             {
-                _previewSourceIds[bus].Remove(sourceId);
+                _programSourceIds[bus].Remove(sourceId);
             }
 
             RecomputeAndPublishV2Locked();
@@ -494,17 +735,28 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     /// (docs/specs/00-system-overview.md §5: 1つの障害が全体を止めない).</summary>
     private void RecomputeAndPublishV2Locked()
     {
+        // Everything downstream of here - the UDP tally, the module backlights, the UI frames - works
+        // from the *expanded* sets, so a source inside a live mix counts as on air everywhere.
+        var pgm1 = ExpandMixMembersLocked(_programSourceIds[ProgramBus.Pgm1]);
+        var pgm2 = ExpandMixMembersLocked(_programSourceIds[ProgramBus.Pgm2]);
+        var pvw1 = ExpandMixMembersLocked(_previewSourceIds[ProgramBus.Pgm1]);
+        var pvw2 = ExpandMixMembersLocked(_previewSourceIds[ProgramBus.Pgm2]);
+
         var tallyV2 = new TallyStateV2(
-            ActivePgm1: ResolveChannelsLocked(_programSourceIds[ProgramBus.Pgm1]),
-            ActivePgm2: ResolveChannelsLocked(_programSourceIds[ProgramBus.Pgm2]),
-            ActivePvw1: ResolveChannelsLocked(_previewSourceIds[ProgramBus.Pgm1]),
-            ActivePvw2: ResolveChannelsLocked(_previewSourceIds[ProgramBus.Pgm2]));
+            ActivePgm1: ResolveChannelsLocked(pgm1),
+            ActivePgm2: ResolveChannelsLocked(pgm2),
+            ActivePvw1: ResolveChannelsLocked(pvw1),
+            ActivePvw2: ResolveChannelsLocked(pvw2));
+
+        // AFV lives or dies on this: the moment what is on air changes is the moment an audio-follows-
+        // video source must become audible or fall silent.
+        RefreshSourceAudioLocked();
 
         _tallyBroadcaster.Publish(tallyV2);
         TallyChangedV2?.Invoke(this, tallyV2);
 
-        var programState = new ProgramBusesState(_programSourceIds[ProgramBus.Pgm1], _programSourceIds[ProgramBus.Pgm2]);
-        var previewState = new PreviewBusesState(_previewSourceIds[ProgramBus.Pgm1], _previewSourceIds[ProgramBus.Pgm2]);
+        var programState = new ProgramBusesState(pgm1, pgm2);
+        var previewState = new PreviewBusesState(pvw1, pvw2);
         var reports = _backlightCalculator.Compute(programState, previewState, _moduleMappings);
 
         try
@@ -531,6 +783,187 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         channels.Sort();
         return channels;
     }
+
+    /// <summary>Writes the current source registry into the persisted runtime config. Must be called
+    /// while holding <see cref="_stateLock"/>.</summary>
+    private void PersistSourcesLocked() =>
+        SaveRuntimeConfigLocked(_runtimeConfig with { Sources = [.. _sourceDefinitions.Values] });
+
+    // ── audio ───────────────────────────────────────────────────────────────────
+
+    private const int Pgm1Bit = 1 << 0;
+    private const int Pgm2Bit = 1 << 1;
+
+    /// <summary>
+    /// Re-applies every source's audio routing from its mode and the current bus membership.
+    ///
+    /// libobs has no notion of audio-follows-video: a source is simply in an audio track or it isn't.
+    /// AFV is therefore a policy this class owns — recompute the mask whenever what is on air changes,
+    /// which is exactly the moment an AFV source should become audible or fall silent. ON sources sit in
+    /// both tracks permanently, OFF in neither.
+    ///
+    /// Membership is the *program* set, expanded through mixes so a camera inside a live mix is heard as
+    /// well as seen. Preview deliberately does not open the audio: cueing a source must never put it on
+    /// air.
+    ///
+    /// Must be called while holding <see cref="_stateLock"/>.
+    /// </summary>
+    private void RefreshSourceAudioLocked()
+    {
+        var livePgm1 = ExpandMixMembersLocked(_programSourceIds[ProgramBus.Pgm1]);
+        var livePgm2 = ExpandMixMembersLocked(_programSourceIds[ProgramBus.Pgm2]);
+
+        foreach (var (id, definition) in _sourceDefinitions)
+        {
+            var mask = definition.AudioMode switch
+            {
+                SourceAudioMode.On => Pgm1Bit | Pgm2Bit,
+                SourceAudioMode.Afv =>
+                    (livePgm1.Contains(id) ? Pgm1Bit : 0) | (livePgm2.Contains(id) ? Pgm2Bit : 0),
+                _ => 0,
+            };
+
+            try
+            {
+                _engine.SetSourceAudioMixers(id, mask);
+            }
+            catch (InvalidOperationException)
+            {
+                // Engine not started yet (startup restore); the next recompute applies it.
+            }
+        }
+    }
+
+    /// <summary>The audio device routing currently applied.</summary>
+    public IReadOnlyList<AudioOutputAssignment> CurrentAudioOutputs
+    {
+        get { lock (_stateLock) { return _runtimeConfig.AudioOutputList; } }
+    }
+
+    /// <summary>Audio render endpoints this machine can play to.</summary>
+    public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => _engine.QueryAudioDevices();
+
+    /// <summary>Routes program buses to audio devices and persists the choice. A bus may be routed to
+    /// several devices, and each bus is independent of the other.</summary>
+    public Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        lock (_stateLock)
+        {
+            _engine.ApplyAudioOutputs(request);
+            SaveRuntimeConfigLocked(_runtimeConfig with { AudioOutputs = [.. request.Outputs] });
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Replays the persisted audio routing onto the engine and re-applies every source's audio
+    /// mode. Runs in the same post-start step as the video outputs and sources.</summary>
+    public void RestorePersistedAudio()
+    {
+        List<AudioOutputAssignment> outputs;
+        lock (_stateLock)
+        {
+            outputs = [.. _runtimeConfig.AudioOutputList];
+            RefreshSourceAudioLocked();
+        }
+
+        if (outputs.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _engine.ApplyAudioOutputs(new AudioOutputsRequest(outputs));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Could not restore the persisted audio routing.");
+        }
+    }
+
+    /// <summary>
+    /// Subscribed to <see cref="HidInputService.ModulePresenceChanged"/> by the composition root:
+    /// reconciles the module mapping list against the Pico's <c>module_present</c> bitmap
+    /// (docs/specs/00-system-overview.md §4.1, bit n = module n attached). A module that appears gets a
+    /// default unbound mapping so the operator can assign sources to it; a module that disappears loses
+    /// its row entirely, so the UI never offers switches for hardware that is not plugged in. The
+    /// mapping of a module that is still present is left untouched, so unplugging and re-plugging the
+    /// controller does not clear the operator's bindings within a session.
+    /// </summary>
+    public void HandleModulePresence(byte presentMask)
+    {
+        bool changed;
+        lock (_stateLock)
+        {
+            var byIndex = _moduleMappings.ToDictionary(m => m.Index);
+            var reconciled = new List<ModuleMapping>();
+            for (var index = 0; index < ProtocolConstants.MaxModules; index++)
+            {
+                if ((presentMask & (1 << index)) == 0)
+                {
+                    continue;
+                }
+
+                reconciled.Add(byIndex.TryGetValue(index, out var existing) ? existing : NewModuleMapping(index));
+            }
+
+            changed = !reconciled.SequenceEqual(_moduleMappings);
+            if (!changed)
+            {
+                return;
+            }
+
+            _logger.LogInformation(
+                "Controller reports modules [{Modules}] present; module list reconciled.",
+                string.Join(", ", reconciled.Select(m => m.Index)));
+
+            _moduleMappings = reconciled;
+            SaveRuntimeConfigLocked(_runtimeConfig with { ModuleMappings = reconciled });
+            RecomputeAndPublishV2Locked();
+        }
+
+        ModulesChanged?.Invoke(this, CurrentModuleMappings);
+    }
+
+    /// <summary>Raised when the module list itself changes (a module was attached to or detached from
+    /// the controller), so the operator window can rebuild its module rows.</summary>
+    public event EventHandler<IReadOnlyList<ModuleMapping>>? ModulesChanged;
+
+    /// <summary>Raised after the tally colours change, so the UI can restyle and the controller can be
+    /// re-lit.</summary>
+    public event EventHandler<TallyColors>? TallyColorsChanged;
+
+    /// <summary>The colours currently used for on-air / staged, per bus.</summary>
+    public TallyColors CurrentTallyColors
+    {
+        get { lock (_stateLock) { return _runtimeConfig.Tally; } }
+    }
+
+    /// <summary>
+    /// Applies a new tally palette. The same values drive the operator window and the module LEDs, so
+    /// the controller is re-lit immediately rather than waiting for the next bus change — otherwise the
+    /// panel would keep showing the old colours until someone happened to switch something.
+    /// </summary>
+    public Task ApplyTallyColorsAsync(TallyColors colors, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(colors);
+
+        lock (_stateLock)
+        {
+            SaveRuntimeConfigLocked(_runtimeConfig with { TallyColors = colors });
+            _backlightCalculator = new BacklightCalculator(new ConfiguredBacklightPolicy(colors));
+            RecomputeAndPublishV2Locked();
+        }
+
+        TallyColorsChanged?.Invoke(this, colors);
+        return Task.CompletedTask;
+    }
+
+    private static ModuleMapping NewModuleMapping(int index) =>
+        new(index, new ModuleSourceBinding(null, nameof(VrTarget.Assignable)), new ModuleSourceBinding(null, nameof(VrTarget.Assignable)));
 
     /// <summary>Must be called while holding <see cref="_stateLock"/>.</summary>
     private void SaveRuntimeConfigLocked(RuntimeConfig updated)

@@ -1,0 +1,175 @@
+<Window x:Class="Switcher.App.MixSourceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mix source" Height="800" Width="1180"
+        Background="{DynamicResource Surface}"
+        Foreground="{DynamicResource Text}"
+        WindowStartupLocation="CenterOwner">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="{DynamicResource SurfaceRaised}" BorderBrush="{DynamicResource Line}"
+                BorderThickness="0,0,0,1" Padding="12,10">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Name" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" Margin="0,0,8,0" />
+                <TextBox x:Name="MixNameBox" Width="220" VerticalAlignment="Center" />
+                <TextBlock Text="Canvas" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" Margin="18,0,8,0" />
+                <TextBlock x:Name="CanvasSizeText" VerticalAlignment="Center" Text="1920 x 1080" FontFamily="{DynamicResource MonoFont}" />
+                <TextBlock x:Name="MixHintText" VerticalAlignment="Center" Margin="18,0,0,0"
+                           Foreground="{DynamicResource TextMuted}"
+                           Text="Drag a layer to move it; drag its bottom-right corner to resize." />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="228" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="220" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Available sources -->
+            <Border Grid.Column="0" Style="{StaticResource DockShell}" Margin="10,10,5,10">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <TextBlock Text="Add a layer" Style="{StaticResource DockTitle}" />
+                    </Border>
+                    <TextBlock DockPanel.Dock="Bottom" Margin="8" TextWrapping="Wrap"
+                               Style="{StaticResource MonoText}"
+                               Text="A source can be in a mix and on a bus at the same time — the device is only opened once." />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6">
+                        <ItemsControl x:Name="AvailableSourcesControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- The button's content is a panel, so it has no implicit accessible
+                                         name; state it explicitly. -->
+                                    <Button Click="OnAddLayerClick" Tag="{Binding Id}" HorizontalAlignment="Stretch"
+                                            AutomationProperties.Name="{Binding Name}"
+                                            HorizontalContentAlignment="Left" Margin="0,0,0,4">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="+" FontWeight="Bold" Margin="0,0,7,0"
+                                                       Foreground="{DynamicResource Accent}" />
+                                            <TextBlock Text="{Binding Name}" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- Canvas: layers are drawn to scale and dragged directly. -->
+            <Border Grid.Column="1" Margin="5,10" Background="{DynamicResource Canvas}"
+                    BorderBrush="{DynamicResource Line}" BorderThickness="1">
+                <Viewbox Stretch="Uniform" Margin="10">
+                    <Border x:Name="StageBorder" Background="#FF07090C" BorderBrush="{DynamicResource LineStrong}"
+                            BorderThickness="1" Width="1920" Height="1080">
+                        <ItemsControl x:Name="LayersControl">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Canvas.Left" Value="{Binding X}" />
+                                    <Setter Property="Canvas.Top" Value="{Binding Y}" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Width="{Binding Width}" Height="{Binding Height}"
+                                          MouseLeftButtonDown="OnLayerMouseDown"
+                                          MouseMove="OnLayerMouseMove"
+                                          MouseLeftButtonUp="OnLayerMouseUp"
+                                          Cursor="SizeAll">
+                                        <Image Source="{Binding Image}" Stretch="Fill" />
+                                        <Border BorderThickness="3">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="#66FFFFFF" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Selected}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                        </Border>
+                                        <Border Background="#B0000000" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Padding="8,3">
+                                            <TextBlock Text="{Binding Name}" FontSize="26" Foreground="White" />
+                                        </Border>
+                                        <!-- Resize grip: a corner big enough to grab at canvas scale. -->
+                                        <Rectangle Width="40" Height="40" Fill="{StaticResource Accent}"
+                                                   HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                   Cursor="SizeNWSE"
+                                                   MouseLeftButtonDown="OnResizeGripMouseDown"
+                                                   Visibility="{Binding Selected, Converter={StaticResource BoolToVisibility}}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </Viewbox>
+            </Border>
+
+            <!-- Selected layer -->
+            <Border Grid.Column="2" Style="{StaticResource DockShell}" Margin="5,10,10,10">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <TextBlock Text="Selected layer" Style="{StaticResource DockTitle}" />
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
+                        <StackPanel x:Name="SelectedLayerPanel">
+                            <TextBlock x:Name="SelectedNameText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                       Text="Nothing selected" Margin="0,0,0,8" />
+
+                            <TextBlock Text="Position" Style="{StaticResource MonoText}" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox x:Name="LayerXBox" Width="76" Margin="0,0,6,0" TextChanged="OnLayerFieldChanged" />
+                                <TextBox x:Name="LayerYBox" Width="76" TextChanged="OnLayerFieldChanged" />
+                            </StackPanel>
+
+                            <TextBlock Text="Size" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox x:Name="LayerWBox" Width="76" Margin="0,0,6,0" TextChanged="OnLayerFieldChanged" />
+                                <TextBox x:Name="LayerHBox" Width="76" TextChanged="OnLayerFieldChanged" />
+                            </StackPanel>
+
+                            <TextBlock Text="Presets" Style="{StaticResource MonoText}" Margin="0,10,0,2" />
+                            <Button Content="Full frame" Click="OnFullFrameClick" HorizontalAlignment="Stretch" Margin="0,0,0,4" />
+                            <Button Content="Half — left" Click="OnHalfLeftClick" HorizontalAlignment="Stretch" Margin="0,0,0,4" />
+                            <Button Content="Half — right" Click="OnHalfRightClick" HorizontalAlignment="Stretch" Margin="0,0,0,4" />
+                            <Button Content="Corner inset" Click="OnCornerInsetClick" HorizontalAlignment="Stretch" Margin="0,0,0,4" />
+
+                            <TextBlock Text="Stacking" Style="{StaticResource MonoText}" Margin="0,10,0,2" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Bring forward" Click="OnBringForwardClick" />
+                                <Button Content="Send back" Click="OnSendBackClick" Margin="0" />
+                            </StackPanel>
+
+                            <Button Content="Remove layer" Click="OnRemoveLayerClick" HorizontalAlignment="Stretch" Margin="0,14,0,0" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Background="{DynamicResource SurfaceRaised}" BorderBrush="{DynamicResource Line}"
+                BorderThickness="0,1,0,0" Padding="12,10">
+            <DockPanel>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}"
+                           Text="Layers are drawn bottom of the list first." />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Cancel" Click="OnCancelClick" MinWidth="90" />
+                    <Button x:Name="SaveButton" Content="Save mix" Click="OnSaveClick"
+                            Style="{StaticResource ToolButtonAccent}" MinWidth="110" Margin="0" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

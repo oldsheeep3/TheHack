@@ -102,7 +102,17 @@ public sealed class FramePumpService : IAsyncDisposable
 
             PumpSourceCells();
 
-            Tick?.Invoke(this, EventArgs.Empty);
+            try
+            {
+                Tick?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                // A throwing subscriber must not take the pump down with it: this loop is the only
+                // source of preview frames for every window, so one bad handler would blank the whole
+                // console (docs/specs/00-system-overview.md §5).
+                _logger.LogWarning(ex, "A frame-pump tick subscriber threw; continuing.");
+            }
         }
     }
 

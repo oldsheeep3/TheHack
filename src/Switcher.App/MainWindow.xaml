@@ -1,246 +1,598 @@
 <Window x:Class="Switcher.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Switcher.App" Height="800" Width="1440"
-        Background="#FF1A1A1E"
-        Foreground="White">
+        xmlns:rendering="clr-namespace:Switcher.App.Rendering"
+        xmlns:mv="clr-namespace:Switcher.App.Multiview"
+        Title="Switcher.App" Height="900" Width="1500"
+        Background="{StaticResource Canvas}"
+        Foreground="{StaticResource Text}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="White" />
-        </Style>
-        <Style TargetType="Border" x:Key="TileBorder">
-            <Setter Property="Background" Value="#FF2A2A30" />
-            <Setter Property="BorderBrush" Value="#FF3C3C44" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Margin" Value="4" />
-            <Setter Property="Padding" Value="6" />
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Margin" Value="0,2" />
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Margin" Value="0,2" />
-        </Style>
+        <rendering:ZeroToVisibilityConverter x:Key="ZeroToVisibility" />
+        <rendering:AudioModeLabelConverter x:Key="AudioModeLabel" />
     </Window.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />   <!-- menu -->
+            <RowDefinition Height="Auto" />   <!-- toolbar -->
+            <RowDefinition Height="*" />      <!-- stage + multiview dock -->
+            <RowDefinition Height="248" />    <!-- bottom docks -->
         </Grid.RowDefinitions>
 
-        <!-- Status bar: 2-bus tally + ATEM connection state + operator-display / projector controls -->
-        <Border Grid.Row="0" Background="#FF101014" Padding="8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="PGM1:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
-                <TextBlock x:Name="ActivePgm1Text" Text="-" Margin="0,0,12,0" />
-                <TextBlock Text="PGM2:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FFFF5555" />
-                <TextBlock x:Name="ActivePgm2Text" Text="-" Margin="0,0,12,0" />
-                <TextBlock Text="PVW1:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FF55FF55" />
-                <TextBlock x:Name="ActivePvw1Text" Text="-" Margin="0,0,12,0" />
-                <TextBlock Text="PVW2:" Margin="0,0,4,0" FontWeight="Bold" Foreground="#FF55FF55" />
-                <TextBlock x:Name="ActivePvw2Text" Text="-" Margin="0,0,16,0" />
-                <TextBlock Text="ATEM:" Margin="0,0,4,0" FontWeight="Bold" />
-                <TextBlock x:Name="AtemStateText" Text="Disconnected" Margin="0,0,16,0" />
-                <TextBlock Text="Operator display:" Margin="0,0,4,0" FontWeight="Bold" />
-                <ComboBox x:Name="OperatorDisplayCombo" Width="220" DisplayMemberPath="Label" Margin="0,0,4,0" />
-                <Button x:Name="MoveOperatorButton" Content="Move" Padding="8,2" Margin="0,0,16,0" Click="OnMoveOperatorClick" />
-                <Button x:Name="OpenProjectorButton" Content="Open Projector" Padding="8,2" Click="OnOpenProjectorClick" />
-            </StackPanel>
+        <!-- ═══ menu ═══════════════════════════════════════════════════════════ -->
+        <Menu Grid.Row="0">
+            <MenuItem Header="_Sources">
+                <MenuItem Header="Rescan devices" Click="OnRescanDevicesClick" />
+                <Separator />
+                <MenuItem Header="Reconnect all disconnected" Click="OnReconnectAllClick" />
+            </MenuItem>
+            <MenuItem Header="_Multiview">
+                <MenuItem Header="Multiview settings..." Click="OnOpenMultiviewSettingsClick" />
+                <MenuItem Header="Show multiview full-screen" Click="OnMultiviewFullscreenClick" />
+            </MenuItem>
+            <MenuItem Header="_Outputs">
+                <MenuItem Header="Apply output routing" Click="OnApplyOutputsClick" />
+                <MenuItem Header="Open projector window" Click="OnOpenProjectorClick" />
+            </MenuItem>
+            <MenuItem Header="_Window">
+                <MenuItem Header="Move console to this display" Click="OnMoveOperatorClick" />
+                <Separator />
+                <MenuItem Header="Tally colours..." Click="OnTallyColorsClick" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ═══ toolbar: the handful of verbs used during a show ═══════════════ -->
+        <Border Grid.Row="1" Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource Line}"
+                BorderThickness="0,0,0,1" Padding="10,7">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Button Content="+ Add source" Click="OnFocusAddSourceClick" Style="{StaticResource ToolButtonAccent}" />
+                    <Button Content="New mix..." Click="OnNewMixClick" ToolTip="Combine several sources into one" />
+                    <Button Content="Multiview settings" Click="OnOpenMultiviewSettingsClick" />
+                    <Button Content="Multiview full-screen" Click="OnMultiviewFullscreenClick" />
+                    <Button Content="Open projector" Click="OnOpenProjectorClick" />
+                </StackPanel>
+
+                <!-- Live state, right-aligned: tally first, then the things that can be wrong. -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Border Style="{StaticResource Chip}" Background="{StaticResource TallyProgram}" Margin="0,0,6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PGM1" Style="{StaticResource ChipText}" Foreground="White" Margin="0,0,6,0" />
+                            <TextBlock x:Name="ActivePgm1Text" Text="-" Style="{StaticResource ChipText}" Foreground="White" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Chip}" Background="{StaticResource TallyProgram}" Margin="0,0,12,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PGM2" Style="{StaticResource ChipText}" Foreground="White" Margin="0,0,6,0" />
+                            <TextBlock x:Name="ActivePgm2Text" Text="-" Style="{StaticResource ChipText}" Foreground="White" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Chip}" Margin="0,0,6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PVW1" Style="{StaticResource ChipText}" Foreground="{StaticResource TallyPreview}" Margin="0,0,6,0" />
+                            <TextBlock x:Name="ActivePvw1Text" Text="-" Style="{StaticResource ChipText}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Chip}" Margin="0,0,16,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PVW2" Style="{StaticResource ChipText}" Foreground="{StaticResource TallyPreview}" Margin="0,0,6,0" />
+                            <TextBlock x:Name="ActivePvw2Text" Text="-" Style="{StaticResource ChipText}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Chip}" Margin="0,0,10,0">
+                        <TextBlock x:Name="AtemStateText" Text="ATEM —" Style="{StaticResource ChipText}" />
+                    </Border>
+                    <TextBlock Text="Console display" Style="{StaticResource MicroLabel}" Margin="0,0,6,0" />
+                    <ComboBox x:Name="OperatorDisplayCombo" Width="170" DisplayMemberPath="Label" Margin="0,0,6,0" />
+                    <Button Content="Move" Click="OnMoveOperatorClick" Margin="0" />
+                </StackPanel>
+            </DockPanel>
         </Border>
 
-        <Grid Grid.Row="1">
+        <!-- ═══ stage: preview | program, transition bar under them ═══════════ -->
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="340" />
+                <ColumnDefinition Width="320" />
             </Grid.ColumnDefinitions>
 
-            <!-- Source dock: 3-stage add form (name/type/device) + tile list (requirement 6/7) -->
-            <DockPanel Grid.Column="0">
-                <Border DockPanel.Dock="Top" Style="{StaticResource TileBorder}">
-                    <StackPanel>
-                        <TextBlock Text="Add Source" FontWeight="Bold" />
-
-                        <TextBlock Text="1. Name" Opacity="0.7" Margin="0,4,0,0" />
-                        <TextBox x:Name="NewSourceNameBox" ToolTip="name" />
-
-                        <TextBlock Text="2. Type" Opacity="0.7" Margin="0,4,0,0" />
-                        <ComboBox x:Name="NewSourceTypeCombo" SelectionChanged="OnSourceTypeChanged">
-                            <ComboBoxItem Content="WEBCAM" />
-                            <ComboBoxItem Content="NDI" />
-                            <ComboBoxItem Content="SRT" />
-                        </ComboBox>
-
-                        <!-- Device dropdown (WEBCAM/NDI) -->
-                        <StackPanel x:Name="DeviceSelectPanel">
-                            <TextBlock Text="3. Device" Opacity="0.7" Margin="0,4,0,0" />
-                            <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name" />
-                            <TextBlock x:Name="NoDevicesText"
-                                       Text="No devices found. Connect the device and press Rescan."
-                                       Opacity="0.7" TextWrapping="Wrap" Visibility="Collapsed" />
-                            <Button Content="Rescan" Click="OnRescanDevicesClick" Margin="0,4,0,0" />
+            <DockPanel Grid.Column="0" Margin="10,10,5,6">
+                <!-- Which M/E the big monitors follow. Both buses stay operable in the Buses dock below. -->
+                <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}" CornerRadius="5,5,0,0"
+                        BorderThickness="1,1,1,1">
+                    <DockPanel>
+                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                            <TextBlock Text="Mix / Effect" Style="{StaticResource DockTitle}" Margin="0,0,10,0" />
+                            <RadioButton x:Name="Me1Radio" Content="ME 1" GroupName="Me" IsChecked="True"
+                                         Checked="OnStageBusChanged" Foreground="{StaticResource Text}"
+                                         VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <RadioButton x:Name="Me2Radio" Content="ME 2" GroupName="Me"
+                                         Checked="OnStageBusChanged" Foreground="{StaticResource Text}"
+                                         VerticalAlignment="Center" />
                         </StackPanel>
+                        <TextBlock x:Name="StageHintText" HorizontalAlignment="Right" Style="{StaticResource MicroLabel}"
+                                   Text="KEYS — 1-9 STAGE · SPACE CUT · A AUTO · ESC CLEAR · TAB SWAP M/E" />
+                    </DockPanel>
+                </Border>
 
-                        <!-- SRT connection settings + setup helper (requirement 6/7) -->
-                        <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
-                            <TextBlock Text="3. SRT connection" Opacity="0.7" Margin="0,4,0,0" />
-                            <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
-                                <ComboBoxItem Content="Listener" />
-                                <ComboBoxItem Content="Caller" />
+                <!-- Transition bar sits between the monitors and the docks, where the hand already is. -->
+                <Border DockPanel.Dock="Bottom" Style="{StaticResource DockShell}" CornerRadius="0,0,5,5"
+                        Padding="10,8" BorderThickness="1,0,1,1">
+                    <DockPanel>
+                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                            <Button x:Name="CutButton" Content="CUT" Click="OnStageCutClick" Style="{StaticResource CutButton}" />
+                            <Button x:Name="AutoButton" Content="AUTO" Click="OnStageAutoClick" Style="{StaticResource ToolButtonAccent}"
+                                    Padding="20,7" />
+                            <TextBlock Text="Fade" Style="{StaticResource MicroLabel}" Margin="6,0,6,0" />
+                            <ComboBox x:Name="AutoDurationCombo" Width="86" SelectedIndex="1" VerticalAlignment="Center">
+                                <ComboBoxItem Content="250 ms" Tag="250" />
+                                <ComboBoxItem Content="500 ms" Tag="500" />
+                                <ComboBoxItem Content="1000 ms" Tag="1000" />
+                                <ComboBoxItem Content="2000 ms" Tag="2000" />
                             </ComboBox>
-                            <TextBlock Text="URL" Opacity="0.7" />
-                            <TextBox x:Name="SrtUrlBox" ToolTip="srt://host:port" />
-                            <TextBlock Text="Latency (ms)" Opacity="0.7" />
-                            <TextBox x:Name="SrtLatencyBox" Text="40" />
-                            <Border Background="#FF14141A" Margin="0,4,0,0" Padding="6">
-                                <StackPanel>
-                                    <TextBlock Text="SRT setup" FontWeight="Bold" />
-                                    <TextBlock x:Name="SrtSetupText" TextWrapping="Wrap" Opacity="0.85" />
-                                    <TextBlock Text="Recommended URL" Opacity="0.7" Margin="0,4,0,0" />
-                                    <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
-                                    <TextBlock Text="Host candidates" Opacity="0.7" Margin="0,4,0,0" />
-                                    <ListBox x:Name="SrtHostsList" MaxHeight="80" Background="#FF1A1A22" Foreground="White" />
-                                    <TextBlock x:Name="SrtAtemText" Opacity="0.7" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                    <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,4,0,0" />
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
-
-                        <Button Content="Add" Click="OnAddSourceClick" Margin="0,6,0,0" />
-                    </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Clear preview" Click="OnStageClearClick" />
+                            <Button Content="Take this bus off air" Click="OnStageAllOffClick" />
+                        </StackPanel>
+                    </DockPanel>
                 </Border>
 
-                <ScrollViewer>
-                    <ItemsControl x:Name="SourceTilesControl">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Style="{StaticResource TileBorder}">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Channel, StringFormat='Ch {0}'}" FontWeight="Bold" />
-                                        <TextBlock Text="{Binding Name}" />
-                                        <TextBlock Text="{Binding Protocol}" Opacity="0.7" />
-                                        <TextBlock Text="{Binding Resolution}" Opacity="0.7" />
-                                        <Ellipse Width="10" Height="10" Fill="{Binding StatusBrush}" HorizontalAlignment="Left" Margin="0,4,0,0" />
-                                        <Button Content="Remove" Click="OnRemoveSourceClick" Tag="{Binding Id}" Margin="0,4,0,0" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </DockPanel>
+                <!-- Preview left, program right: the OBS Studio Mode reading order. -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-            <!-- Configurable multiview with rectangular merge (requirement 3) + full-screen (requirement 4) -->
-            <DockPanel Grid.Column="1">
-                <Border DockPanel.Dock="Top" Style="{StaticResource TileBorder}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Multiview" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <Button Content="Merge selected" Click="OnMergeSelectedClick" Padding="6,2" Margin="0,0,4,0" />
-                        <Button Content="Split" Click="OnSplitSelectedClick" Padding="6,2" Margin="0,0,4,0" />
-                        <Button Content="Clear selection" Click="OnClearSelectionClick" Padding="6,2" Margin="0,0,16,0" />
-                        <TextBlock Text="Full-screen:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <ComboBox x:Name="MultiviewFullscreenDisplayCombo" Width="200" DisplayMemberPath="Label" Margin="0,0,4,0" />
-                        <Button Content="Show full-screen" Click="OnMultiviewFullscreenClick" Padding="6,2" />
-                    </StackPanel>
-                </Border>
-                <ItemsControl x:Name="MultiviewControl">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="*" />
-                                    <RowDefinition Height="*" />
-                                    <RowDefinition Height="*" />
-                                    <RowDefinition Height="*" />
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                            </Grid>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemContainerStyle>
-                        <Style TargetType="ContentPresenter">
-                            <Setter Property="Grid.Row" Value="{Binding Row}" />
-                            <Setter Property="Grid.Column" Value="{Binding Col}" />
-                            <Setter Property="Grid.RowSpan" Value="{Binding RowSpan}" />
-                            <Setter Property="Grid.ColumnSpan" Value="{Binding ColSpan}" />
-                        </Style>
-                    </ItemsControl.ItemContainerStyle>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource TileBorder}" BorderBrush="{Binding BorderBrush}" BorderThickness="2"
-                                    MouseLeftButtonDown="OnMultiviewCellMouseDown"
-                                    MouseEnter="OnMultiviewCellMouseEnter"
-                                    MouseLeftButtonUp="OnMultiviewCellMouseUp">
-                                <DockPanel>
-                                    <ComboBox DockPanel.Dock="Top"
-                                              ItemsSource="{Binding AvailableTokens}"
-                                              SelectedItem="{Binding Token, Mode=TwoWay}"
-                                              SelectionChanged="OnMultiviewCellSelectionChanged" />
-                                    <Image Source="{Binding Image}" Stretch="Uniform" />
-                                </DockPanel>
+                    <Border Grid.Column="0" Margin="0,0,5,0" Background="{StaticResource Canvas}"
+                            BorderBrush="{StaticResource TallyPreview}" BorderThickness="3">
+                        <Grid>
+                            <Image x:Name="PreviewImage" Stretch="Uniform" />
+                            <Border VerticalAlignment="Bottom" Background="{StaticResource TallyPreview}" Padding="8,3">
+                                <TextBlock x:Name="PreviewCaption" Text="PREVIEW — nothing staged"
+                                           Foreground="#FF04150C" FontSize="11" FontWeight="SemiBold" />
                             </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="1" Margin="5,0,0,0" Background="{StaticResource Canvas}"
+                            BorderBrush="{StaticResource TallyProgram}" BorderThickness="3">
+                        <Grid>
+                            <Image x:Name="ProgramImage" Stretch="Uniform" />
+                            <Border VerticalAlignment="Bottom" Background="{StaticResource TallyProgram}" Padding="8,3">
+                                <TextBlock x:Name="ProgramCaption" Text="PROGRAM — off air"
+                                           Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
             </DockPanel>
 
-            <!-- Output routing + module mapping panels -->
-            <ScrollViewer Grid.Column="2">
-                <StackPanel Margin="4">
-                    <TextBlock Text="Outputs" FontWeight="Bold" Margin="0,0,0,4" />
-                    <ItemsControl x:Name="OutputsControl">
+            <!-- Multiview dock: display only. Editing lives in Multiview settings. -->
+            <Border Grid.Column="1" Margin="5,10,10,6" Style="{StaticResource DockShell}">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <DockPanel>
+                            <TextBlock Text="Multiview" Style="{StaticResource DockTitle}" />
+                            <TextBlock x:Name="MultiviewSummaryText" HorizontalAlignment="Right"
+                                       Style="{StaticResource MicroLabel}" Text="4 x 4" />
+                        </DockPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Bottom" Padding="8" Background="{StaticResource Surface}">
+                        <StackPanel>
+                            <Button Content="Edit layout..." Click="OnOpenMultiviewSettingsClick" HorizontalAlignment="Stretch" />
+                            <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{StaticResource TallyProgram}" Margin="0,0,5,0" />
+                                <TextBlock Text="on air" Style="{StaticResource MicroLabel}" Margin="0,0,12,0" />
+                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{StaticResource TallyPreview}" Margin="0,0,5,0" />
+                                <TextBlock Text="staged" Style="{StaticResource MicroLabel}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <ItemsControl x:Name="MultiviewControl" Margin="6">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <!-- Dimensions come from the ItemsControl's Tag, which the code-behind
+                                     reassigns whenever the layout's grid size changes (4x4 … 6x6). -->
+                                <mv:MultiviewGridPanel
+                                    Rows="{Binding Tag.Rows, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}"
+                                    Cols="{Binding Tag.Cols, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Style="{StaticResource TileBorder}">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Sink}" FontWeight="Bold" />
-                                        <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}" />
-                                        <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="Display" Opacity="0.7" />
-                                            <ComboBox ItemsSource="{Binding AvailableDisplays}"
-                                                      DisplayMemberPath="Label"
-                                                      SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}" />
-                                            <CheckBox Content="Hide Cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,4,0,0" />
-                                            <CheckBox Content="Fullscreen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" Margin="0,4,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="NDI name" Opacity="0.7" />
-                                            <TextBox Text="{Binding NdiName, Mode=TwoWay}" />
-                                        </StackPanel>
-                                    </StackPanel>
+                                <Border Margin="2" Background="{StaticResource Canvas}" CornerRadius="3"
+                                        BorderBrush="{Binding BorderBrush}" BorderThickness="{Binding BorderThickness}">
+                                    <Grid>
+                                        <Image Source="{Binding Image}" Stretch="Uniform" />
+                                        <Border VerticalAlignment="Bottom" Background="#B0000000" Padding="4,1"
+                                                Visibility="{Binding HasLabel, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="{Binding Label}" FontSize="9" FontFamily="{StaticResource MonoFont}"
+                                                       Foreground="{StaticResource Text}" />
+                                        </Border>
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    <Button Content="Apply Outputs" Click="OnApplyOutputsClick" Margin="0,4,0,12" />
+                </DockPanel>
+            </Border>
+        </Grid>
 
-                    <TextBlock Text="Modules" FontWeight="Bold" Margin="0,0,0,4" />
-                    <ItemsControl x:Name="ModulesControl">
+        <!-- ═══ bottom docks: Sources | Buses | Outputs | Controller ══════════ -->
+        <Grid Grid.Row="3" Margin="10,4,10,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.4*" />
+                <ColumnDefinition Width="1.5*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ── Sources ── -->
+            <Border Grid.Column="0" Style="{StaticResource DockShell}" Margin="0,0,4,0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <DockPanel>
+                            <TextBlock Text="Sources" Style="{StaticResource DockTitle}" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="SourceCountText" Style="{StaticResource MicroLabel}" Text="0" Margin="0,0,8,0" />
+                                <!-- The add form is a panel over this dock rather than a permanent
+                                     column: it is only needed while setting up, and it wants the full
+                                     width when it is. -->
+                                <Button x:Name="AddSourceToggle" Content="+" Click="OnToggleAddSourceClick"
+                                        Style="{StaticResource ToolButtonAccent}" Padding="9,0" Margin="0"
+                                        FontSize="14" FontWeight="Bold" ToolTip="Add a source" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Grid>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6">
+                            <StackPanel>
+                                <ItemsControl x:Name="SourceTilesControl">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <!-- Status stripe on the left edge: green connected, red error,
+                                                 grey idle - readable before any of the text is. -->
+                                            <Border Style="{StaticResource ListRow}" BorderThickness="3,0,0,0"
+                                                    BorderBrush="{Binding StatusBrush}">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap">
+                                                        <Run Text="{Binding Channel, StringFormat='ch{0}', Mode=OneWay}" />
+                                                        <Run Text=" · " />
+                                                        <Run Text="{Binding Protocol, Mode=OneWay}" />
+                                                        <Run Text=" · " />
+                                                        <Run Text="{Binding StatusText, Mode=OneWay}" />
+                                                    </TextBlock>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                        <TextBlock Text="AUDIO" Style="{StaticResource MicroLabel}" Margin="0,0,5,0" />
+                                                        <ComboBox ItemsSource="{Binding AudioModes}"
+                                                                  SelectedItem="{Binding AudioMode, Mode=TwoWay}"
+                                                                  SelectionChanged="OnSourceAudioModeChanged" Tag="{Binding Id}"
+                                                                  Width="66" FontSize="11"
+                                                                  ToolTip="AFV: heard while this source is on air · ON: always heard · OFF: never heard">
+                                                            <ComboBox.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding Converter={StaticResource AudioModeLabel}}" />
+                                                                </DataTemplate>
+                                                            </ComboBox.ItemTemplate>
+                                                        </ComboBox>
+                                                    </StackPanel>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                        <Button Content="Edit mix" Click="OnEditMixClick" Tag="{Binding Id}"
+                                                                Padding="8,2" FontSize="11"
+                                                                Visibility="{Binding IsMix, Converter={StaticResource BoolToVisibility}}" />
+                                                        <Button Content="Reconnect" Click="OnReconnectSourceClick" Tag="{Binding Id}"
+                                                                Padding="8,2" FontSize="11"
+                                                                Visibility="{Binding IsReconnectable, Converter={StaticResource BoolToVisibility}}" />
+                                                        <Button Content="Remove" Click="OnRemoveSourceClick" Tag="{Binding Id}"
+                                                                Padding="8,2" FontSize="11" Margin="0" />
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Text="No sources yet. Press + above to add your first camera."
+                                           Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="2,6,2,0"
+                                           Visibility="{Binding ElementName=SourceTilesControl, Path=Items.Count, Converter={StaticResource ZeroToVisibility}}" />
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- 3-step add form, opened from the + button and covering the list while open. -->
+                        <Border x:Name="AddSourcePanel" Visibility="Collapsed"
+                                Background="{StaticResource SurfaceSunken}" BorderBrush="{StaticResource LineStrong}"
+                                BorderThickness="1">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                                    <DockPanel>
+                                        <TextBlock Text="Add source" Style="{StaticResource DockTitle}" />
+                                        <Button Content="✕" Click="OnCloseAddSourceClick" HorizontalAlignment="Right"
+                                                Padding="7,1" Margin="0" ToolTip="Close without adding" />
+                                    </DockPanel>
+                                </Border>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
+                                <StackPanel>
+
+                                    <TextBlock Text="1. Name it" Style="{StaticResource MonoText}" />
+                                    <TextBox x:Name="NewSourceNameBox" ToolTip="A name you will recognise on the bus buttons" />
+
+                                    <TextBlock Text="2. What kind?" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                    <ComboBox x:Name="NewSourceTypeCombo" SelectionChanged="OnSourceTypeChanged">
+                                        <ComboBoxItem Content="WEBCAM" />
+                                        <ComboBoxItem Content="NDI" />
+                                        <ComboBoxItem Content="SRT" />
+                                        <ComboBoxItem Content="IMAGE" />
+                                        <ComboBoxItem Content="HTML" />
+                                    </ComboBox>
+
+                                    <StackPanel x:Name="DeviceSelectPanel">
+                                        <TextBlock Text="3. Which device?" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                        <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name" />
+                                        <TextBlock x:Name="NoDevicesText" Style="{StaticResource MonoText}"
+                                                   TextWrapping="Wrap" Visibility="Collapsed" />
+                                        <StackPanel x:Name="WebcamFormatPanel">
+                                            <TextBlock Text="Capture mode" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                            <ComboBox x:Name="WebcamFormatCombo" SelectedIndex="0" />
+                                        </StackPanel>
+                                        <Button Content="Rescan" Click="OnRescanDevicesClick" Margin="0,4,0,0" HorizontalAlignment="Stretch" />
+                                    </StackPanel>
+
+                                    <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
+                                        <TextBlock Text="3. SRT connection" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                        <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
+                                            <ComboBoxItem Content="Listener" />
+                                            <ComboBoxItem Content="Caller" />
+                                        </ComboBox>
+                                        <TextBox x:Name="SrtUrlBox" ToolTip="srt://host:port" />
+                                        <TextBlock Text="Latency (ms)" Style="{StaticResource MonoText}" />
+                                        <TextBox x:Name="SrtLatencyBox" Text="40" />
+                                        <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,4,0,0" />
+                                        <TextBlock x:Name="SrtSetupText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
+                                        <ListBox x:Name="SrtHostsList" MaxHeight="60" Background="{StaticResource Canvas}"
+                                                 Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}" />
+                                        <TextBlock x:Name="SrtAtemText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    </StackPanel>
+
+                                    <StackPanel x:Name="ImagePanel" Visibility="Collapsed">
+                                        <TextBlock Text="3. Image file" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                        <TextBox x:Name="ImagePathBox" ToolTip="png / jpg / gif / webp / bmp" />
+                                        <Button Content="Browse..." Click="OnBrowseImageClick" Margin="0,4,0,0" />
+                                    </StackPanel>
+
+                                    <StackPanel x:Name="HtmlPanel" Visibility="Collapsed">
+                                        <TextBlock Text="3. Web address or .html" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                        <TextBox x:Name="HtmlUrlBox" ToolTip="https://... or a local .html path" />
+                                        <CheckBox x:Name="HtmlLocalFileCheck" Content="Local file" />
+                                        <Button Content="Browse..." Click="OnBrowseHtmlClick" Margin="0,2,0,0" />
+                                        <TextBlock Text="Page size" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBox x:Name="HtmlWidthBox" Text="1920" Width="54" Margin="0,0,4,0" />
+                                            <TextBox x:Name="HtmlHeightBox" Text="1080" Width="54" Margin="0,0,4,0" />
+                                            <TextBox x:Name="HtmlFpsBox" Text="30" Width="38" ToolTip="Frames per second" />
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <Button Content="Add source" Click="OnAddSourceClick" Margin="0,8,0,0"
+                                            Style="{StaticResource ToolButtonAccent}" HorizontalAlignment="Stretch" />
+                                </StackPanel>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </DockPanel>
+            </Border>
+
+            <!-- ── Buses ── -->
+            <Border Grid.Column="1" Style="{StaticResource DockShell}" Margin="4,0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <DockPanel>
+                            <TextBlock Text="Buses" Style="{StaticResource DockTitle}" />
+                            <TextBlock HorizontalAlignment="Right" Style="{StaticResource MicroLabel}"
+                                       Text="CLICK TO STAGE ON PREVIEW" />
+                        </DockPanel>
+                    </Border>
+                    <ItemsControl x:Name="BusesControl" Margin="6">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><UniformGrid Rows="2" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Style="{StaticResource TileBorder}">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Index, StringFormat='Module {0}'}" FontWeight="Bold" />
-                                        <TextBlock Text="Src1" Opacity="0.7" />
-                                        <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src1SourceId, Mode=TwoWay}" />
-                                        <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src1VrTarget, Mode=TwoWay}" />
-                                        <TextBlock Text="Src2" Opacity="0.7" Margin="0,4,0,0" />
-                                        <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src2SourceId, Mode=TwoWay}" />
-                                        <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src2VrTarget, Mode=TwoWay}" />
-                                    </StackPanel>
+                                <Border Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource Line}"
+                                        BorderThickness="1" CornerRadius="4" Margin="0,0,0,4" Padding="8,6">
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Left" Width="112" Margin="0,0,10,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding ProgramLabel}" FontSize="11" FontWeight="Bold"
+                                                           Foreground="{StaticResource TallyProgram}" Margin="0,0,5,0" />
+                                                <TextBlock Text="{Binding ProgramText}" Style="{StaticResource MonoText}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding PreviewLabel}" FontSize="11" FontWeight="Bold"
+                                                           Foreground="{StaticResource TallyPreview}" Margin="0,0,5,0" />
+                                                <TextBlock Text="{Binding PreviewText}" Style="{StaticResource MonoText}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                                <Button Content="CUT" Click="OnBusCutClick" Style="{StaticResource CutButton}"
+                                                        Padding="9,2" FontSize="11" />
+                                                <Button Content="AUTO" Click="OnBusAutoClick" Style="{StaticResource ToolButtonAccent}"
+                                                        Padding="9,2" FontSize="11" Margin="0" />
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <ScrollViewer VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Auto">
+                                            <StackPanel>
+                                                <ItemsControl ItemsSource="{Binding Sources}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <ToggleButton Content="{Binding Name}"
+                                                                          IsChecked="{Binding Staged, Mode=TwoWay}"
+                                                                          Click="OnBusSourceToggleClick"
+                                                                          MinWidth="72" Margin="0,0,4,4" Cursor="Hand">
+                                                                <ToggleButton.Template>
+                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                        <Border x:Name="bd" CornerRadius="4" Padding="9,4"
+                                                                                Background="{StaticResource Control}"
+                                                                                BorderBrush="{StaticResource LineStrong}" BorderThickness="1">
+                                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="bd" Property="Background" Value="{StaticResource ControlHover}" />
+                                                                            </Trigger>
+                                                                            <!-- Staged (green) is the operator's own choice; on-air (red) is a
+                                                                                 fact about the signal, so it outranks it on the same button. -->
+                                                                            <Trigger Property="IsChecked" Value="True">
+                                                                                <Setter TargetName="bd" Property="Background" Value="#FF16452C" />
+                                                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TallyPreview}" />
+                                                                            </Trigger>
+                                                                            <DataTrigger Binding="{Binding OnProgram}" Value="True">
+                                                                                <Setter TargetName="bd" Property="Background" Value="{StaticResource TallyProgram}" />
+                                                                                <Setter TargetName="bd" Property="BorderBrush" Value="#FFFF6B66" />
+                                                                                <Setter Property="Foreground" Value="White" />
+                                                                            </DataTrigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </ToggleButton.Template>
+                                                            </ToggleButton>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock Text="Add a source on the left and it will appear here."
+                                                           Style="{StaticResource MonoText}" TextWrapping="Wrap"
+                                                           Visibility="{Binding Sources.Count, Converter={StaticResource ZeroToVisibility}}" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </DockPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    <Button Content="Apply Modules" Click="OnApplyModulesClick" Margin="0,4,0,0" />
-                </StackPanel>
-            </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- ── Outputs ── -->
+            <Border Grid.Column="2" Style="{StaticResource DockShell}" Margin="4,0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <DockPanel>
+                            <TextBlock Text="Outputs" Style="{StaticResource DockTitle}" />
+                            <TextBlock HorizontalAlignment="Right" Style="{StaticResource MicroLabel}" Text="WHERE VIDEO GOES" />
+                        </DockPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Bottom" Padding="6">
+                        <StackPanel>
+                            <Button Content="Apply output routing" Click="OnApplyOutputsClick" HorizontalAlignment="Stretch" />
+
+                            <!-- Audio is routed per bus, and a bus may drive more than one device -
+                                 libobs monitors to a single device, so this is our own render path. -->
+                            <TextBlock Text="AUDIO OUT" Style="{StaticResource MicroLabel}" Margin="0,10,0,3" />
+                            <ItemsControl x:Name="AudioOutputsControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="0,0,0,3">
+                                            <TextBlock Text="{Binding Label}" Width="38" FontSize="11" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding BusBrush}" />
+                                            <Button DockPanel.Dock="Right" Content="×" Click="OnRemoveAudioRowClick"
+                                                    Tag="{Binding}" Padding="7,0" Margin="3,0,0,0" FontSize="11"
+                                                    ToolTip="この出力を外す" />
+                                            <ComboBox ItemsSource="{Binding Devices}" DisplayMemberPath="Name"
+                                                      SelectedItem="{Binding SelectedDevice, Mode=TwoWay}" FontSize="11" />
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                <Button Content="+ PGM1" Click="OnAddAudioRowClick" Tag="Pgm1" Padding="8,2" FontSize="11" />
+                                <Button Content="+ PGM2" Click="OnAddAudioRowClick" Tag="Pgm2" Padding="8,2" FontSize="11" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                <Button Content="Apply audio" Click="OnApplyAudioClick" />
+                                <Button Content="Rescan" Click="OnRescanAudioClick" Margin="0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6,6,6,0">
+                        <ItemsControl x:Name="OutputsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource ListRow}">
+                                        <StackPanel>
+                                            <DockPanel>
+                                                <TextBlock Text="{Binding Sink}" FontWeight="SemiBold" FontSize="12" />
+                                                <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}"
+                                                          Width="86" HorizontalAlignment="Right" />
+                                            </DockPanel>
+                                            <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
+                                                <ComboBox ItemsSource="{Binding AvailableDisplays}" DisplayMemberPath="Label"
+                                                          SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}" />
+                                                <StackPanel Orientation="Horizontal">
+                                                    <CheckBox Content="Hide cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,3,10,3" />
+                                                    <CheckBox Content="Full-screen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBox Text="{Binding NdiName, Mode=TwoWay}" ToolTip="NDI name seen by receivers" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- ── Controller ── -->
+            <Border Grid.Column="3" Style="{StaticResource DockShell}" Margin="4,0,0,0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+                        <DockPanel>
+                            <TextBlock Text="Controller" Style="{StaticResource DockTitle}" />
+                            <TextBlock x:Name="ModuleCountText" HorizontalAlignment="Right"
+                                       Style="{StaticResource MicroLabel}" Text="NOT CONNECTED" />
+                        </DockPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Bottom" Padding="6">
+                        <Button Content="Apply module bindings" Click="OnApplyModulesClick" HorizontalAlignment="Stretch" />
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6,6,6,0">
+                        <StackPanel>
+                            <TextBlock x:Name="NoModulesText" Style="{StaticResource MonoText}" TextWrapping="Wrap"
+                                       Text="No modules detected. A row appears here for each module the Pico controller reports." />
+                            <ItemsControl x:Name="ModulesControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource ListRow}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Index, StringFormat='Module {0}'}"
+                                                           FontWeight="SemiBold" FontSize="12" />
+                                                <TextBlock Text="Switch 1 controls" Style="{StaticResource MonoText}" Margin="0,3,0,0" />
+                                                <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src1SourceId, Mode=TwoWay}" />
+                                                <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src1VrTarget, Mode=TwoWay}" />
+                                                <TextBlock Text="Switch 2 controls" Style="{StaticResource MonoText}" Margin="0,3,0,0" />
+                                                <ComboBox ItemsSource="{Binding AvailableSourceIds}" SelectedItem="{Binding Src2SourceId, Mode=TwoWay}" />
+                                                <ComboBox ItemsSource="{Binding VrTargets}" SelectedItem="{Binding Src2VrTarget, Mode=TwoWay}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>
