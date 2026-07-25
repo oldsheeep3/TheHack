@@ -47,3 +47,16 @@ public sealed record OutputAssignment(
 /// Request body for PUT /api/v1/outputs (docs/specs/00-system-overview.md §4.2).
 /// </summary>
 public sealed record OutputsRequest(IReadOnlyList<OutputAssignment> Outputs);
+
+/// <summary>
+/// Whether an assigned sink is actually egressing.
+/// <para>
+/// An assignment can be accepted and still never start — an NDI sink on a machine with no NDI runtime,
+/// a virtual camera another application already holds. The routing table alone cannot tell an operator
+/// that a program bus is going nowhere, so the engine reports this separately.
+/// </para>
+/// </summary>
+public sealed record OutputStatus(OutputSink Sink, OutputSource Source, bool Running);
+
+/// <summary>Engine reply for the output-status query.</summary>
+public sealed record OutputStatusReport(IReadOnlyList<OutputStatus> Outputs);
