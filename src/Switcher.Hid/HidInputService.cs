@@ -24,6 +24,10 @@ public sealed class HidInputService : IDisposable
     private volatile bool _running;
     private bool _disposed;
 
+    // Read-thread only. -1 (no valid bitmap can be negative) forces the first report to publish, and
+    // resetting it on Stop re-publishes presence after a reconnect.
+    private int _lastModulePresent = -1;
+
     public HidInputService() : this(new HidSharpDevice())
     {
     }
@@ -44,6 +48,12 @@ public sealed class HidInputService : IDisposable
     /// or more dropped frames.</summary>
     public event Action? SequenceGapDetected;
 
+    /// <summary>Raised with the report's <c>module_present</c> bitmap (bit n = module n attached,
+    /// docs/specs/00-system-overview.md §4.1) on the first report after <see cref="Start"/> and then
+    /// only when the bitmap changes. This is the controller telling the App which physical modules
+    /// exist, so the App can add/drop module rows instead of assuming a fixed <c>MAX_MODULES</c>.</summary>
+    public event Action<byte>? ModulePresenceChanged;
+
     /// <summary>Opens the device and starts the background read loop. Safe to call again while
     /// already started (no-op).</summary>
     public void Start()
@@ -58,6 +68,7 @@ public sealed class HidInputService : IDisposable
             }
 
             _device.Open();
+            _lastModulePresent = -1;
             _running = true;
             _readThread = new Thread(ReadLoop) { IsBackground = true, Name = nameof(HidInputService) };
             _readThread.Start();
@@ -110,6 +121,14 @@ public sealed class HidInputService : IDisposable
             }
 
             var report = HidReportParser.ParseInput(body);
+
+            // Presence is republished only on change: the Pico sends module_present in every report
+            // (~1 kHz), and the App's handler persists the reconciled module list to disk.
+            if (_lastModulePresent != report.ModulePresent)
+            {
+                _lastModulePresent = report.ModulePresent;
+                ModulePresenceChanged?.Invoke(report.ModulePresent);
+            }
 
             if (_seqGapTracker.Update(report.Seq))
             {

@@ -21,6 +21,8 @@ internal static class WebHostEndpoints
         endpoints.MapPost("/api/v1/program", ProgramEndpoint.PostAsync);
         endpoints.MapPut("/api/v1/multiview", MultiviewEndpoint.PutAsync);
         endpoints.MapPut("/api/v1/outputs", OutputsEndpoint.PutAsync);
+        endpoints.MapGet("/api/v1/audio/devices", AudioEndpoint.GetDevices);
+        endpoints.MapPut("/api/v1/audio/outputs", AudioEndpoint.PutOutputsAsync);
         endpoints.MapPut("/api/v1/modules", ModulesEndpoint.PutAsync);
         endpoints.MapPut("/api/v1/atem", AtemEndpoint.PutConfigAsync);
         endpoints.MapPost("/api/v1/atem/command", AtemEndpoint.PostCommandAsync);

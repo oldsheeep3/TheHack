@@ -23,6 +23,9 @@ public interface ISwitcherConfigService
 
     Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Routes program buses to audio output devices, replacing the whole table.</summary>
+    Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default);
+
     Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default);
 
     Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default);
