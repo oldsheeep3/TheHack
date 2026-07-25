@@ -43,6 +43,7 @@
     <Compile Include="..\..\src\Switcher.App\Configuration\AppConfigLoader.cs" Link="AppSources\AppConfigLoader.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfig.cs" Link="AppSources\RuntimeConfig.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigStore.cs" Link="AppSources\RuntimeConfigStore.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigMigration.cs" Link="AppSources\RuntimeConfigMigration.cs" />
     <Compile Include="..\..\src\Switcher.App\Display\DisplayConflictEvaluator.cs" Link="AppSources\DisplayConflictEvaluator.cs" />
     <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewRegionModel.cs" Link="AppSources\MultiviewRegionModel.cs" />
     <Compile Include="..\..\src\Switcher.App\Multiview\CellTally.cs" Link="AppSources\CellTally.cs" />

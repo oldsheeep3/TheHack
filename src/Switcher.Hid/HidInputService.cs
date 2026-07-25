@@ -127,25 +127,62 @@ public sealed class HidInputService : IDisposable
             if (_lastModulePresent != report.ModulePresent)
             {
                 _lastModulePresent = report.ModulePresent;
-                ModulePresenceChanged?.Invoke(report.ModulePresent);
+                Publish(ModulePresenceChanged, report.ModulePresent);
             }
 
             if (_seqGapTracker.Update(report.Seq))
             {
-                SequenceGapDetected?.Invoke();
+                Publish(SequenceGapDetected);
             }
 
             foreach (var edge in _edgeDetector.Process(report))
             {
-                SwitchEdge?.Invoke(edge);
+                Publish(SwitchEdge, edge);
             }
 
             foreach (var change in _vrFilter.Process(report))
             {
-                VrChanged?.Invoke(change);
+                Publish(VrChanged, change);
             }
         }
     }
+
+    /// <summary>
+    /// Raises one subscriber event, containing anything it throws.
+    ///
+    /// This loop runs on its own background thread, where an escaping exception ends the whole process —
+    /// and the subscribers are App-side handlers that touch the engine, the disk and the network, any of
+    /// which can fail transiently. A controller event must never be able to take the switcher down
+    /// (docs/specs/00-system-overview.md §5: 1つの障害が全体を止めない). The failure is surfaced through
+    /// <see cref="HandlerFailed"/> so the host can log it.
+    /// </summary>
+    private void Publish<T>(Action<T>? handler, T argument)
+    {
+        try
+        {
+            handler?.Invoke(argument);
+        }
+        catch (Exception ex)
+        {
+            HandlerFailed?.Invoke(ex);
+        }
+    }
+
+    private void Publish(Action? handler)
+    {
+        try
+        {
+            handler?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            HandlerFailed?.Invoke(ex);
+        }
+    }
+
+    /// <summary>Raised when a subscriber of one of the input events threw. Purely diagnostic — the read
+    /// loop carries on regardless.</summary>
+    public event Action<Exception>? HandlerFailed;
 
     public void Dispose()
     {

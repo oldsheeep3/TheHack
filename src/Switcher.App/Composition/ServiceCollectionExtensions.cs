@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
+using Switcher.App.Logging;
 using Switcher.App.Orchestration;
 using Switcher.App.Services;
 using Switcher.Atem;
@@ -22,8 +23,25 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddSwitcherApp(this IServiceCollection services, AppConfig config)
     {
         services.AddSingleton(config);
-        services.AddSingleton(sp => new RuntimeConfigStore(AppContext.BaseDirectory, sp.GetRequiredService<ILogger<RuntimeConfigStore>>()));
-        services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information).AddDebug());
+
+        // Everything the app writes goes under %LOCALAPPDATA%\Switcher: an installed build lives in a
+        // directory a standard user cannot write to, and a failed save there used to surface as an
+        // exception on whichever thread caused it - including the HID read loop, which ends the process.
+        var dataDirectory = AppPaths.EnsureDataDirectory();
+
+        services.AddLogging(builder => builder
+            .SetMinimumLevel(LogLevel.Information)
+            .AddDebug()
+            // Without a file sink, every "log a warning and carry on" path in this app - a dead output, a
+            // source that would not open, a HID write that failed - reports to nobody once it ships.
+            .AddProvider(new FileLoggerProvider(AppPaths.LogDirectory)));
+
+        services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<RuntimeConfigStore>>();
+            RuntimeConfigMigration.MigrateLegacyFile(AppContext.BaseDirectory, dataDirectory, logger);
+            return new RuntimeConfigStore(dataDirectory, logger);
+        });
 
         // The single video engine (libobs). One shared instance drives both the App UI and the embedded
         // Web host so a source added over the API is the same source the operator window renders. The
@@ -49,6 +67,9 @@ public static class ServiceCollectionExtensions
         {
             var hidInput = new HidInputService();
             var orchestrator = sp.GetRequiredService<AppOrchestrator>();
+            var hidLogger = sp.GetRequiredService<ILogger<HidInputService>>();
+            hidInput.HandlerFailed += ex =>
+                hidLogger.LogError(ex, "A controller input handler threw; the input loop is continuing.");
             hidInput.SwitchEdge += orchestrator.HandleSwitchEdge;
             hidInput.VrChanged += orchestrator.HandleVrChanged;
             // The controller's module_present bitmap is the source of truth for which modules exist:

@@ -258,7 +258,41 @@ QApplication は不要。検証環境: OBS 32.0.4 / CEF 127。
 `ApplyTallyColorsAsync` で PGM/PVW × バス1/2 の4色を設定・永続化する。UI は `DynamicResource` 経由で、
 Pico のモジュール LED は `ConfiguredBacklightPolicy` 経由で **同じ色** を使う。
 
-### 3.3 フレームポンプ
+### 3.3 ロック順序（デッドロック回避）
+
+`LibObsVideoEngine` はネイティブの `ctx->lock` と競合しうるマネージドロックを**フレーム経路に置かない**。
+
+ネイティブ側は `ctx->lock` を保持したまま `obs_enter_graphics()`（＝グラフィックススレッドの停止）を
+呼ぶ（`engine_set_tap` / `rebind_bus_targets_locked`）。一方フレームコールバックは**グラフィックス
+スレッド上**で `MarkSourceLive` を通る。ここで両者が同じロックを触ると次の循環待ちが成立する:
+
+```
+T1: デバイス列挙   … マネージドロック保持 → ctx->lock 待ち（NDI finder で最大1秒）
+T2: TAKE/ソース追加 … ctx->lock 保持     → グラフィックス停止待ち
+T3: グラフィックス  … 停止できない        → マネージドロック待ち（T1 が保持）
+```
+
+対策は2つ:
+
+- ソース登録簿は `ConcurrentDictionary`。グラフィックススレッドはロックを一切取らない。
+- ポインタを返すネイティブ照会（`engine_enumerate_devices` / `_audio_devices` / `_get_output_status`。
+  返り値はエンジン所有のバッファで次回呼び出しで上書きされる）は**専用の `_nativeQueryGate`** で直列化し、
+  コピーだけをロック内で行う。このロックはグラフィックススレッドが触らないので循環が閉じない。
+
+### 3.4 ログと未捕捉例外
+
+本アプリの主要なエラー戦略は「警告を出して続行」なので、読めるログが無いと設計が意味を失う。
+
+- `FileLoggerProvider` が `%LOCALAPPDATA%\Switcher\logs\switcher-<date>.log` に出力（14日で自動削除）。
+  書き込みは専用スレッドで直列化し、**呼び出し元（グラフィックススレッド・HID 読み取りスレッド）を
+  ディスクで待たせない**。キューが溢れたら行を捨てる。ログ自体は決して例外を投げない。
+- `App.OnStartup` で `DispatcherUnhandledException`（記録して続行 — 本番中に消えるのが最悪）、
+  `AppDomain.UnhandledException` と `TaskScheduler.UnobservedTaskException`（終了は防げないので記録のみ）
+  を登録する。
+- `HidInputService` の読み取りループは各ハンドラ呼び出しを捕捉し、`HandlerFailed` で通知する。
+  バックグラウンドスレッドから例外が抜けるとプロセスが終了するため。
+
+### 3.5 フレームポンプ
 
 `FramePumpService` が 30fps でバス／ソースのフレームを読み、トークン（`PGM1`/`PVW2`/`SRC:<id>` …）
 ごとにキャッシュして `Tick` を発火する。UI プレビュー専用（出力はエンジン側が持つ）。
@@ -268,9 +302,18 @@ Pico のモジュール LED は `ConfiguredBacklightPolicy` 経由で **同じ�
 さらに `PreviewBitmapCache` がトークンごとに **1 tick 1回だけ** 変換し、開いている全ウィンドウで
 共有する。`Tick` の購読はオペレーターウィンドウ1つだけで、そこから他ウィンドウへ配る。
 
-### 3.4 永続化
+### 3.6 永続化
 
-`runtime-config.json`（実行ファイル隣）に保存され、起動時に復元される。
+`%LOCALAPPDATA%\Switcher\runtime-config.json` に保存され、起動時に復元される。配布物のディレクトリ
+（`C:\Program Files\...`）は標準ユーザーが書けないため、実行ファイルの隣には**置かない**。旧バージョンが
+実行ファイル隣に書いたファイルは初回起動時に自動で移行する（`RuntimeConfigMigration`）。
+
+書き込みは **temp → `File.Move(overwrite)`** で、直前の版を `.bak` に残す。インプレース書き込みだと
+書き込み中のクラッシュ／電源断で切り詰められたファイルが残り、次回起動が無言でデフォルトに戻る
+（＝ソース・レイアウト・出力・音声ルーティングの全喪失）。読み出しは本体が壊れていれば `.bak` を試す。
+
+保存は **例外を投げない**。永続化の失敗で落ちてはならないのに加え、保存はその変更を起こしたスレッド
+（HID 読み取りスレッドを含む）で走るため、そこから例外が抜けるとプロセスごと終了する。
 
 - `sources`（`SourceDefinition` 一式）
 - `multiview_grid` / `multiview_regions`（+ 後方互換の `multiview_cells`）

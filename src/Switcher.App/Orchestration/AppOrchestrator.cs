@@ -72,6 +72,7 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     // device/URL settings a re-open needs.
     private readonly Dictionary<string, SourceDefinition> _sourceDefinitions = new(StringComparer.Ordinal);
 
+    private bool _backlightFailureReported;
     private IReadOnlyList<ModuleMapping> _moduleMappings = [];
     private Dictionary<(string ControllerId, int ButtonId), AtemCommandMapping> _atemMappingTable = new();
     private RuntimeConfig _runtimeConfig;
@@ -762,10 +763,21 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         try
         {
             _hidBacklightService.Send(reports);
+            _backlightFailureReported = false;
         }
         catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException or IOException)
         {
-            _logger.LogWarning(ex, "Failed to send HID backlight update.");
+            // Once per outage, not once per bus change: with no controller attached this fires on every
+            // TAKE, and a log that repeats the same line hundreds of times is a log nobody reads.
+            if (!_backlightFailureReported)
+            {
+                _backlightFailureReported = true;
+                _logger.LogWarning(ex, "Failed to send HID backlight update; further failures are logged at debug level.");
+            }
+            else
+            {
+                _logger.LogDebug(ex, "Failed to send HID backlight update.");
+            }
         }
     }
 
