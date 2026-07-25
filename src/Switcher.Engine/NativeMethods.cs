@@ -27,6 +27,11 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int engine_remove_source(IntPtr ctx, string id);
 
+    // Returns a UTF-8 JSON pointer owned by the engine (valid until the next call); read with
+    // Marshal.PtrToStringUTF8 - do NOT let the marshaller free it (hence IntPtr, not string, return).
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr engine_enumerate_devices(IntPtr ctx, string kind);
+
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial void engine_set_preview(IntPtr ctx, int bus, string? sourceId);
 
@@ -47,6 +52,22 @@ internal static partial class NativeMethods
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int engine_apply_multiview(IntPtr ctx, string layoutJson);
+
+    // --- audio ---
+    // Bus n owns libobs audio track n; `mixers` is a bitmask of the buses that hear this source.
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void engine_set_source_audio(IntPtr ctx, string id, int mixers);
+
+    // Returns a UTF-8 JSON pointer owned by the engine (valid until the next call); read with
+    // Marshal.PtrToStringUTF8 - do NOT let the marshaller free it.
+    [LibraryImport(Lib)]
+    internal static partial IntPtr engine_enumerate_audio_devices(IntPtr ctx);
+
+    [LibraryImport(Lib)]
+    internal static partial IntPtr engine_get_output_status(IntPtr ctx);
+
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int engine_apply_audio_outputs(IntPtr ctx, string assignmentsJson);
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int engine_start_display(IntPtr ctx, string target, IntPtr hwnd, int displayId);
