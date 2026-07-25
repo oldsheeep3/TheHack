@@ -1,0 +1,46 @@
+Switcher — live video switcher
+Copyright (C) 2026 2026-Team-38
+
+SPDX-License-Identifier: GPL-2.0-or-later
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
+Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+--------------------------------------------------------------------------------
+Why the GPL
+--------------------------------------------------------------------------------
+
+Switcher's video engine links libobs (the core of OBS Studio), which is licensed
+under the GNU General Public License version 2. A release also ships libobs and
+a set of OBS plugins in `obs-runtime/`. The combined work is therefore governed
+by the GPL.
+
+In practical terms, anyone who receives a binary is entitled to the complete
+corresponding source — both this project's source and the source of the exact
+libobs build that is bundled with it.
+
+See THIRD-PARTY-NOTICES.md for the full component inventory, including one open
+question about the proprietary NDI library that must be resolved before a public
+release.
+
+--------------------------------------------------------------------------------
+Full licence text
+--------------------------------------------------------------------------------
+
+The complete, unmodified text of the GNU General Public License, version 2, must
+accompany this file as `COPYING`. It is reproduced verbatim from
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt and is not restated here so
+that the canonical wording cannot drift.
+
+A distribution is incomplete without it — see the checklist at the end of
+THIRD-PARTY-NOTICES.md.

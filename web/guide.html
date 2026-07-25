@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使い方 — Switcher</title>
+<meta name="description" content="Switcher のセットアップから本番運用まで。インストール、ソース追加、切り替え、マルチビュー、出力、トラブルシューティング。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark"></span> Switcher</a>
+    <nav class="site-nav" aria-label="サイト">
+      <a href="index.html">ホーム</a>
+      <a href="features.html">機能</a>
+      <a href="guide.html">使い方</a>
+      <a href="hardware.html" data-soon>ハードウェア</a>
+      <a href="atem.html" data-soon>ATEM 連携</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Guide</p>
+      <h1>使い方</h1>
+      <p class="lede">インストールから本番運用まで。所要 10 分程度です。</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Setup</p>
+        <h2>セットアップ</h2>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div>
+            <h3>展開する</h3>
+            <p>映像エンジン（OBS のコアである libobs とそのプラグイン）は配布物の
+            <code>obs-runtime/</code> に同梱しています。<strong>OBS Studio のインストールは不要</strong>で、
+            展開してそのまま起動できます。</p>
+            <p>すでに OBS Studio（30.0〜32.99）が入っている PC では、同梱物を消せばそちらを自動検出して
+            使います。場所を明示したい場合は <code>appsettings.json</code> の <code>ObsInstallPath</code> を
+            指定してください。</p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div>
+            <h3>（任意）NDI Tools をインストールする</h3>
+            <p>NDI の入出力を使う場合のみ必要です。NDI Tools に含まれる<strong>NDI ランタイム</strong>を Switcher が実行時に読み込みます。</p>
+            <p><strong>OBS 用の NDI プラグイン（DistroAV）は不要</strong>です — Switcher は NDI を自前で実装しています。
+            NDI を使わないなら何も入れる必要はありません。</p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div>
+            <h3>Switcher を起動する</h3>
+            <p>起動すると映像エンジンが立ち上がり、前回の設定（入力・マルチビュー配置・出力・
+            モジュール割当）が復元されます。</p>
+            <div class="note">
+              <p><strong>バスは空の状態で起動します。</strong>起動しただけで映像が本線に乗ることは
+              ありません。出す操作は明示的に行ってください。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Sources</p>
+        <h2>入力を追加する</h2>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div>
+            <h3>「+」を押す</h3>
+            <p>Sources ドック右上の <code>+</code>（またはツールバーの「+ Add source」）で追加
+            フォームが開きます。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>名前・種類・接続先を入れる</h3>
+            <ul>
+              <li><strong>名前</strong> — バスのボタンに出るので、見て分かる名前を付けます</li>
+              <li><strong>種類</strong> — WEBCAM / NDI / SRT / IMAGE / HTML</li>
+              <li><strong>接続先</strong> — デバイス、URL、ファイルなど</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>カメラは「Capture mode」を確認する</h3>
+            <p>「Device default」のままだとカメラが申告する既定モードで開きます。機種によっては
+            これが極端に低いフレームレートです（実測で 8 fps の例あり）。<strong>映像がカクつく場合は
+            1280x720 @ 30 などを明示してください。</strong></p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>MIX を作る（任意）</h3>
+            <p>ツールバーの「New mix...」で、複数のソースを 1 枚に合成したソースを作れます。
+            レイヤーをドラッグで移動、右下角でリサイズ。作った MIX はカメラと同じように扱えます。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">On air</p>
+        <h2>切り替える</h2>
+      </div>
+
+      <div class="grid grid-2">
+        <article class="card">
+          <h3>基本の流れ</h3>
+          <p>Buses ドックでソースのボタンを押す → <strong>プレビュー（緑）</strong>に載ります。
+          左の大きい画面で確認したら <strong>CUT</strong>（即時）か <strong>AUTO</strong>（フェード）で
+          本線へ。押した瞬間に PGM と PVW が入れ替わります。</p>
+        </article>
+        <article class="card">
+          <h3>キーボード</h3>
+          <p><code>1</code>–<code>9</code> ステージ / <code>Space</code> CUT / <code>A</code> AUTO /
+          <code>Esc</code> プレビュークリア / <code>Tab</code> M/E 切替。<br>
+          文字入力中は無効になるので、名前を打っている最中に誤って切り替わることはありません。</p>
+        </article>
+        <article class="card">
+          <h3>色の意味</h3>
+          <p><span style="color:var(--tally-pgm);font-weight:700">赤 = オンエア</span>、
+          <span style="color:var(--tally-pvw);font-weight:700">緑 = 次に出るもの</span>。
+          マルチビューのセル、バスのボタン、ソースの枠すべてで同じ意味です。</p>
+        </article>
+        <article class="card">
+          <h3>すぐ止めたいとき</h3>
+          <p>「Take this bus off air」で、そのバスを一発で無出力にできます。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Layout &amp; output</p>
+        <h2>マルチビューと出力</h2>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div>
+            <h3>マルチビューを組む</h3>
+            <p>ツールバーの「Multiview settings」で開きます。グリッドは 4×4 〜 6×6。セルをドラッグで
+            矩形選択して「Merge selected」で結合、「Split」で分割。各セルのドロップダウンで中身
+            （PGM1 / PVW2 / 各ソース / 空）を選びます。変更は即時反映・自動保存です。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>別ディスプレイに全画面表示する</h3>
+            <p>設定画面の「Show full-screen」、またはツールバーの「Multiview full-screen」。
+            <code>Esc</code> で閉じます。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>出力を割り当てる</h3>
+            <p>Outputs ドックで、各出力に PGM1 / PGM2 のどちらを流すか選び「Apply output routing」。</p>
+            <ul>
+              <li><strong>Vcam1</strong> — 仮想カメラ。Zoom / Teams / Meet などがカメラとして認識します</li>
+              <li><strong>Vcam2 / Ndi1 / Ndi2</strong> — NDI 送出（映像と音声）</li>
+              <li><strong>Hdmi</strong> — 指定ディスプレイに全画面</li>
+            </ul>
+            <div class="note">
+              <p><strong>PGM1・PGM2 のそれぞれに最低 1 つ</strong>割り当ててください。全部を同じバスに
+              向けた設定は保存できません。</p>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h3>音声を出す</h3>
+            <p>音声は映像ソースに付いてきます。Sources ドックの各行にある <code>AUDIO</code> で、
+            <code>AFV</code>（そのソースがオンエアの間だけ鳴る）・<code>ON</code>（常に鳴る。BGM や
+            司会マイク）・<code>OFF</code> を選びます。既定は <code>AFV</code> です。</p>
+            <p>出力先は Outputs ドック下部の <strong>AUDIO OUT</strong>。PGM1 / PGM2 それぞれに音声
+            デバイスを選び「Apply audio」。デバイスを後から挿した場合は「Rescan」で再列挙します。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Troubleshooting</p>
+        <h2>うまくいかないとき</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">症状</th><th scope="col">確認すること</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">起動に失敗する</th>
+                <td><code>obs-runtime/</code> が配布物と一緒に展開されているか。インストール済みの OBS を使う設定なら
+                そのバージョン（検証範囲は 30.0〜32.99。範囲外だと libobs の ABI が合わないことがあります）と
+                <code>appsettings.json</code> の <code>ObsInstallPath</code> を確認してください</td></tr>
+            <tr><th scope="row">カメラが「no signal」</th>
+                <td>他のアプリがそのカメラを使っていないか。<strong>同じカメラを 2 つのソースにすることはできません</strong>
+                （1 つのソースを共有してください）。復帰したら「Reconnect」を押します</td></tr>
+            <tr><th scope="row">音が出ない</th>
+                <td>ソースの AUDIO が <code>OFF</code> になっていないか。<code>AFV</code> はオンエア中だけ鳴ります。
+                Outputs ドックで PGM1 / PGM2 に出力デバイスが割り当てられ、「Apply audio」を押したかも確認してください</td></tr>
+            <tr><th scope="row">出力が起動しない</th>
+                <td>NDI 系の出力（Vcam2 / Ndi1 / Ndi2）は <strong>NDI Tools（NDI ランタイム）</strong>が入っていないと起動しません。
+                仮想カメラは他のアプリが使用中だと起動しません。どちらの場合も「Apply output routing」時に警告が出ます</td></tr>
+            <tr><th scope="row">出力ルーティングが適用できない</th>
+                <td>PGM1・PGM2 の<strong>それぞれに最低 1 つの出力</strong>が必要です。全部を同じバスに向けると弾かれます</td></tr>
+            <tr><th scope="row">映像がカクつく</th>
+                <td>「Capture mode」がデバイス既定になっていないか。明示的に 30 fps 以上のモードを選びます</td></tr>
+            <tr><th scope="row">NDI が一覧に出ない</th>
+                <td>NDI Tools（NDI ランタイム）が入っているか。送信側と同じネットワークにいるか。数秒待ってから「Rescan」</td></tr>
+            <tr><th scope="row">モジュールが表示されない</th>
+                <td>Controller ドックは<strong>実際に接続されているモジュールだけ</strong>を表示します。
+                USB 接続とコントローラーのファームウェアを確認してください</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Switcher — 2026-Team-38</span>
+    <span class="spacer"></span>
+    <a href="index.html">ホーム</a>
+    <a href="features.html">機能</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

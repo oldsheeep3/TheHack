@@ -160,5 +160,9 @@ make             # ビルド + 実行（全テスト green で終了コード0�
 
 ## ドキュメント
 
+- **技術仕様（現行実装）**: [`docs/spec/technical-overview.md`](docs/spec/technical-overview.md)（詳細） /
+  [`docs/spec/summary.md`](docs/spec/summary.md)（要約） / [`docs/slides/switcher.md`](docs/slides/switcher.md)（Marp）
+- **配布サイト**: [`web/`](web/) — LP + 使い方（`web/build-preview.ps1` で1ファイルのプレビューを生成）
+- **ライセンス**: GPL-2.0-or-later（[`LICENSE`](LICENSE) / [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)）
 - **仕様書**: [`docs/specs/`](docs/specs/) — 親仕様書 + コンポーネント別詳細仕様
 - **実装計画 / タスク**: [`docs/tasks/`](docs/tasks/) — マルチエージェント実装のオーケストレーション計画とタスク指示書

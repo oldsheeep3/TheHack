@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switcher — PC 1台で完結するライブ映像スイッチャー</title>
+<meta name="description" content="2系統 M/E・NDI・マルチビュー・物理コントローラーを 1 台の PC にまとめたライブ映像スイッチャー。libobs ベース。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark"></span> Switcher</a>
+    <nav class="site-nav" aria-label="サイト">
+      <a href="index.html">ホーム</a>
+      <a href="features.html">機能</a>
+      <a href="guide.html">使い方</a>
+      <a href="hardware.html" data-soon>ハードウェア</a>
+      <a href="atem.html" data-soon>ATEM 連携</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Live video switcher · Windows</p>
+      <h1>カメラも、スライドも、NDI も。PC 1台で切り替える。</h1>
+      <p class="lede">
+        Switcher は <strong>2系統の M/E</strong> を持つライブ映像スイッチャーです。映像処理は OBS の
+        コアである libobs に任せ、その上に<strong>本番で使えるスイッチャーの操作系</strong>を載せました。
+        物理コントローラー・Web・キーボードのどれからでも同じ1つの状態を動かします。
+      </p>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="guide.html">使い方を見る</a>
+        <a class="btn" href="features.html">機能一覧</a>
+      </div>
+
+      <!-- The product's own console, abstracted. Tally colours carry their real meaning. -->
+      <div class="mock" aria-label="オペレーター画面のイメージ">
+        <div class="mock-bar">
+          <span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span>
+          <span class="mock-title">Switcher — operator console</span>
+        </div>
+        <div class="mock-body">
+          <div class="mon is-pvw"><span class="mon-fill fill-b"></span><span class="mon-cap">PVW1 — SLIDES</span></div>
+          <div class="mon is-pgm"><span class="mon-fill fill-a"></span><span class="mon-cap">PGM1 — CAM 1</span></div>
+          <div class="mock-mv">
+            <div class="mv-cell is-pgm"><span class="mon-fill fill-a"></span></div>
+            <div class="mv-cell is-pvw"><span class="mon-fill fill-b"></span></div>
+            <div class="mv-cell is-pgm"><span class="mon-fill fill-c"></span></div>
+            <div class="mv-cell"><span class="mon-fill fill-d"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Signal path</p>
+        <h2>映像がどこを通るかが、そのまま画面になっている</h2>
+        <p class="lede">入力を選び、プレビューに載せ、CUT で本線に出す。それだけです。</p>
+      </div>
+
+      <div class="flow">
+        <div class="flow-node"><b>入力</b><small>カメラ · NDI · SRT · 画像 · Web ページ · MIX</small></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-node is-live"><b>PGM1 / PVW1</b><small>M/E 1 — CUT・AUTO</small></div>
+        <div class="flow-node is-live"><b>PGM2 / PVW2</b><small>M/E 2 — 独立して動く</small></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-node"><b>出力</b><small>仮想カメラ · NDI ×2 · HDMI 全画面 · 音声デバイス</small></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Why</p>
+        <h2>この構成でしかできないこと</h2>
+      </div>
+
+      <div class="grid grid-3">
+        <article class="card">
+          <span class="tag">Shared input pool</span>
+          <h3>同じカメラを同時に何度でも</h3>
+          <p>入力は 1 回だけ開き、全系統がそのインスタンスを共有します。1台のカメラを PGM1 と PGM2 と
+          MIX に同時に出せるのは、この単一プロセス構成だからです。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Dual M/E</span>
+          <h3>2系統がぶつからない</h3>
+          <p>PGM1/PVW1 と PGM2/PVW2 は完全に独立。片方の CUT がもう片方に波及しません。配信用と
+          会場スクリーン用で別の絵を同時に作れます。</p>
+        </article>
+        <article class="card">
+          <span class="tag">MIX source</span>
+          <h3>合成した絵も「1つのソース」</h3>
+          <p>複数のソースを自由配置した MIX は、カメラとまったく同じ扱いになります。バスにも、
+          マルチビューにも、物理スイッチにも割り当てられます。</p>
+        </article>
+        <article class="card">
+          <span class="tag">NDI</span>
+          <h3>プラグイン不要の NDI</h3>
+          <p>NDI SDK を直接使って入出力を実装しています。OBS 用の NDI プラグインは要りません。
+          NDI ランタイムが無い PC でも同じバイナリがそのまま動き、NDI 機能だけが無効になります。</p>
+        </article>
+        <article class="card">
+          <span class="tag">One source of truth</span>
+          <h3>操作経路が競合しない</h3>
+          <p>物理コントローラー・Web・画面のどれから触っても、状態変更は同じ 1 か所を通ります。
+          同時に操作してもタリーやバックライトがずれません。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Audio follows video</span>
+          <h3>音は映像についてくる</h3>
+          <p>ソースを追加すればその音声も一緒に入ります。オンエア中だけ鳴らす AFV、常時鳴らす ON、
+          鳴らさない OFF をソースごとに選ぶだけ。PGM1 と PGM2 の音は別々の出力デバイスへ送れます。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Tally</span>
+          <h3>オンエアが一目で分かる</h3>
+          <p>マルチビューのセルは、内容がオンエアなら赤枠・ステージ中なら緑枠。カメラのセルも同じ
+          ルールなので、バス表を追わなくても状態が読めます。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Requirements</p>
+        <h2>動作環境</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">項目</th><th scope="col">要件</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">OS</th><td>Windows 10 / 11（64bit）</td></tr>
+            <tr><th scope="row">必須</th><td>なし — 映像エンジン（libobs）は配布物に同梱しています。OBS Studio のインストールは不要です</td></tr>
+            <tr><th scope="row">任意</th><td>インストール済みの OBS Studio（30.0〜32.99）を代わりに使うこともできます</td></tr>
+            <tr><th scope="row">任意</th><td>NDI Tools（NDI ランタイム）— NDI の入出力を使う場合のみ</td></tr>
+            <tr><th scope="row">任意</th><td>Pico 2W コントローラー（物理スイッチ／VR で操作する場合）</td></tr>
+            <tr><th scope="row">GPU</th><td>Direct3D 11 対応</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:20px"><a class="btn btn-primary" href="guide.html">セットアップ手順へ</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">License</p>
+        <h2>配布とライセンス</h2>
+      </div>
+      <p class="lede">Switcher は <strong>GPL-2.0-or-later</strong> で配布します。映像エンジンとして
+      libobs（GPL-2.0）をリンクし同梱しているためです。</p>
+      <ul>
+        <li>バイナリを受け取った人は<strong>ソースコードを受け取る権利</strong>があります。同梱している
+        libobs ビルドの対応ソースも合わせて提供します。</li>
+        <li>再配布に追加の制限を課すことはできません。同梱物はそれぞれの著作権表示を保持しています。</li>
+        <li><strong>NDI ランタイムは同梱していません</strong>（プロプライエタリのため）。ユーザーが入れた NDI Tools を実行時に
+        動的ロードし、無ければ NDI 機能だけが無効になります。</li>
+      </ul>
+      <p>同梱物と各ライセンスの内訳は配布物の <code>LICENSE</code> と
+      <code>THIRD-PARTY-NOTICES.md</code> を参照してください。</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Switcher — 2026-Team-38</span>
+    <span class="spacer"></span>
+    <a href="features.html">機能</a>
+    <a href="guide.html">使い方</a>
+    <a href="hardware.html">ハードウェア</a>
+    <a href="atem.html">ATEM 連携</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
