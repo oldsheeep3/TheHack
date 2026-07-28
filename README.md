@@ -1,5 +1,7 @@
 # HybridSwitcher — ハイブリッドIP映像スイッチャー
 
+[![CI](https://github.com/nxtend-the-hack/2026-team-38/actions/workflows/ci.yml/badge.svg)](https://github.com/nxtend-the-hack/2026-team-38/actions/workflows/ci.yml)
+
 既存機材（ATEM Mini）と自作ハードウェア（自作スイッチングモジュール群 + Pico 2W）、
 ネットワーク技術（SRT / NDI / WebAPI）を融合した、次世代のハイブリッドIP映像スイッチャーシステム。
 
@@ -143,6 +145,60 @@ make             # ビルド + 実行（全テスト green で終了コード0�
 
 実機向けクロスビルド（Pico SDK / `arm-none-eabi` ツールチェーン必要）は
 [`firmware/pico2w-controller/README.md`](firmware/pico2w-controller/README.md) を参照。
+
+### CI（GitHub Actions）
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) が **全 PR**（タスク → 親Epic の PR も含む）と
+`main` / `develop` への push で走る。すべて `ubuntu-latest`。
+
+| ジョブ | 内容 |
+| --- | --- |
+| `.NET` | `dotnet build -c Release -warnaserror` → `dotnet format --verify-no-changes` → `dotnet test`（結果 `.trx` をアーティファクト化） |
+| `phone-bridge` | `npm ci` → `npm run lint`(eslint) → `npm run build`(`tsc -b` 型チェック + vite) → `npm test`(vitest)、`dist/` をアーティファクト化 |
+| `firmware` | `firmware/pico2w-controller/test` と `firmware/switcher-module/test` のホストテスト（gcc、`-Werror`） |
+
+ブランチ保護の必須チェックには集約ジョブ **`All checks`** 1つを指定すればよい。
+
+CI 対象外（ローカル/Windows でのみ検証可能）:
+
+- `native/switcher-engine`（libobs 依存・Windows + OBS 専用・`.sln` 外）と、それを要する App の実起動
+- `web/build-preview.ps1`（Windows PowerShell 前提のパス処理）
+- `apps/phone-bridge` の Prettier 整形チェック（既存ファイルが未整形のため未導入。`npm run format` で一括整形後に追加可能）
+
+### ミラー（個人リポジトリ → ハッカソン用リポジトリ）
+
+開発を個人アカウントの public リポジトリで行い、ハッカソン用 private リポジトリ
+（`nxtend-the-hack/2026-team-38`）へ push のたびに反映する運用を
+[`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が担う。**片方向**（個人 → ハッカソン用）。
+
+push されたブランチ `X` に対して:
+
+1. ミラー先の **`mirror/X`**（本ワークフロー専用ブランチ）へ push
+2. `mirror/X` → `X` の PR を作成（既にオープンなら head の push で自動更新されるので何もしない）
+3. **マージは人間が行う**
+
+つまりミラー先の `main` / `develop` へ直接 push も force push もしない。force は
+「元リポジトリで rebase / amend して `mirror/X` が fast-forward できなくなった」場合の
+フォールバックとして `mirror/*` に対してのみ使う。タグは同名でそのまま push（PR なし）。
+ミラー先の ref を削除することはない（`--mirror` は使わない）ので、ブランチ削除は同期されない。
+
+ミラー先リポジトリ自身では **スキップされる**（`github.repository` を見て自己ループを防ぐ）ため、
+このリポジトリに置いたままでも無害。ミラー元に置かれたときだけ動く。
+
+ミラー元（個人リポジトリ）側でのセットアップ:
+
+| 種別 | 名前 | 値 |
+| --- | --- | --- |
+| Secret | `MIRROR_TOKEN` | ミラー先に書き込める PAT。Fine-grained なら **Contents: RW + Pull requests: RW + Workflows: RW**（`.github/workflows/` を含むため Workflows 権限が必須）、Classic なら `repo` + `workflow` |
+| Variable（任意） | `MIRROR_TARGET_REPO` | ミラー先 `owner/repo`。未設定なら `nxtend-the-hack/2026-team-38` |
+
+初回コピーやブランチをまとめて送りたいときは、Actions から **Mirror to hackathon repo** を
+`all_refs` にチェックを入れて手動実行する（全ブランチ + 全タグ）。
+
+> - PR は **マージコミット**でマージすること。squash / rebase merge だと merge-base が進まず、
+>   次回の PR に同じコミットが再び載る。
+> - ミラー先に同名ブランチが無いと PR は作れない（`mirror/X` の push だけ行い notice を出す）。
+>   その場合はミラー先で `mirror/X` からブランチを作る。
 
 ## 共通プロトコル / ポート
 

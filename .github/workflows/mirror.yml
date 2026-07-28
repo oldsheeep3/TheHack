@@ -1,0 +1,181 @@
+# 個人用リポジトリ → ハッカソン用リポジトリへの片方向ミラー（PR ベース）。
+#
+# 想定運用: 開発は個人アカウントの public リポジトリで行い、その内容をハッカソン用の
+# private リポジトリ（= MIRROR_TARGET_REPO / 既定は nxtend-the-hack/2026-team-38）へ
+# push のたびに反映する。
+#
+# 反映は「ミラー先の同名ブランチへ直接 push」ではなく、
+#   1. ミラー専用ブランチ `mirror/<元ブランチ名>` へ push
+#   2. `mirror/<元ブランチ名>` → `<元ブランチ名>` の PR を作成（既にあれば更新に任せる）
+# の 2 段階。マージは人間が行う。ミラー先の main/develop に force push は一切しない
+# （`mirror/*` は本ワークフロー専用ブランチなので、元リポジトリで履歴が書き換わった
+#   場合に限り fallback で force する）。
+#
+# このワークフローは「今のリモート以外」に置かれたときだけ動く（ジョブの if を参照）。
+# ミラー先リポジトリでは自分自身が対象になるためスキップされ、ループしない。
+#
+# ── セットアップ（ミラー元＝個人リポジトリ側で設定する） ────────────────────────
+#  1. ミラー先（private リポジトリ）に書き込めるトークンを用意する。
+#     - Fine-grained PAT: Repository access = ミラー先リポジトリ /
+#       Permissions = Contents: RW, Pull requests: RW, Workflows: RW
+#       （このリポジトリは .github/workflows/ を含むため Workflows 権限が必須）
+#     - Classic PAT の場合は `repo` + `workflow` スコープ。
+#  2. ミラー元リポジトリの Settings → Secrets and variables → Actions で
+#     Secret `MIRROR_TOKEN` に上記トークンを登録する。
+#  3. ミラー先が nxtend-the-hack/2026-team-38 以外なら、同画面の Variables に
+#     `MIRROR_TARGET_REPO` = `owner/repo` を登録する（未設定なら既定値を使用）。
+#
+#  PR は「マージコミット」でマージすること。squash / rebase merge だと merge-base が
+#  進まず、次回の PR に同じコミットが再び載る。
+# ────────────────────────────────────────────────────────────────────────────
+name: Mirror to hackathon repo
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  # 手動実行。all_refs=true で全ブランチ／全タグをまとめて送る（初回コピー用）。
+  workflow_dispatch:
+    inputs:
+      all_refs:
+        description: '全ブランチ・全タグを送る（未チェックなら選択中のブランチのみ）'
+        type: boolean
+        default: false
+
+# 同じ ref の push が連続しても順番に流す（先行実行を打ち切ると中途半端な状態で終わり得る）。
+concurrency:
+  group: mirror-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REPO: ${{ vars.MIRROR_TARGET_REPO || 'nxtend-the-hack/2026-team-38' }}
+  # ミラー専用ブランチの接頭辞。ここへは本ワークフローしか push しない。
+  MIRROR_PREFIX: mirror
+
+jobs:
+  mirror:
+    name: Mirror to ${{ vars.MIRROR_TARGET_REPO || 'nxtend-the-hack/2026-team-38' }}
+    # ミラー先リポジトリ自身では走らせない（= 自己ループ防止）。
+    # GitHub の式の文字列比較は大文字小文字を無視するので owner の表記ゆれは問題ない。
+    # ブランチ削除の push イベントでは同期対象が無いのでスキップ（ミラー先の ref は消さない）。
+    if: >-
+      github.repository != (vars.MIRROR_TARGET_REPO || 'nxtend-the-hack/2026-team-38')
+      && github.event.deleted != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check MIRROR_TOKEN
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          if [ -z "$MIRROR_TOKEN" ]; then
+            echo "::error::Secret MIRROR_TOKEN が未設定です。mirror.yml 冒頭のセットアップ手順を参照してください。"
+            exit 1
+          fi
+
+      # サブモジュールは gitlink（コミット参照）としてそのまま運ばれるので中身は取得しない。
+      # fetch-depth: 0 = 全履歴 + 全ブランチ/タグ（all_refs 送信に必要）。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+
+      - name: Push mirror branches / tags
+        id: push
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          ALL_REFS: ${{ inputs.all_refs }}
+        run: |
+          set -euo pipefail
+          # トークンを含む URL はログに出さない。
+          TARGET_URL="https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_REPO}"
+
+          # <local ref> を mirror/<branch> へ送る。通常は fast-forward push で足り、
+          # 元リポジトリで rebase/amend された場合だけ force に落とす（対象は mirror/* のみ）。
+          push_branch() {
+            local src="$1" branch="$2"
+            local dst="refs/heads/${MIRROR_PREFIX}/${branch}"
+            echo "  ${branch} -> ${MIRROR_PREFIX}/${branch}"
+            if git push "${TARGET_URL}" "${src}:${dst}" 2>/dev/null; then
+              return 0
+            fi
+            echo "::warning::${MIRROR_PREFIX}/${branch} は fast-forward できないため force で上書きします（元リポジトリで履歴が書き換わった可能性）。"
+            git push --force "${TARGET_URL}" "${src}:${dst}"
+          }
+
+          BRANCHES=""
+
+          if [ "${ALL_REFS}" = "true" ]; then
+            echo "Mirroring all branches and tags to ${TARGET_REPO}"
+            git fetch --prune --tags --force origin '+refs/heads/*:refs/remotes/origin/*'
+            git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin > /tmp/mirror-branches.txt
+            while read -r branch; do
+              # refs/remotes/origin/HEAD はシンボリックな別名なので送らない。
+              # mirror/* は本ワークフローが作った複製なので送り返さない。
+              case "${branch}" in
+                '' | HEAD | "${MIRROR_PREFIX}"/*) continue ;;
+              esac
+              push_branch "refs/remotes/origin/${branch}" "${branch}"
+              BRANCHES="${BRANCHES} ${branch}"
+            done < /tmp/mirror-branches.txt
+            git push --tags "${TARGET_URL}"
+          elif [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/}" ]; then
+            # タグ push はそのまま同名で送る（PR は不要）。
+            echo "Mirroring tag ${GITHUB_REF} to ${TARGET_REPO}"
+            git push "${TARGET_URL}" "${GITHUB_REF}:${GITHUB_REF}"
+          else
+            branch="${GITHUB_REF#refs/heads/}"
+            echo "Mirroring branch ${branch} to ${TARGET_REPO}"
+            push_branch "${GITHUB_REF}" "${branch}"
+            BRANCHES="${branch}"
+          fi
+
+          # 後続ステップ（PR 作成）へ、送ったブランチ名を空白区切りで渡す。
+          echo "branches=${BRANCHES# }" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull requests
+        if: steps.push.outputs.branches != ''
+        env:
+          # gh CLI はミラー先リポジトリに対して叩くので MIRROR_TOKEN を使う。
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          BRANCHES: ${{ steps.push.outputs.branches }}
+        run: |
+          set -euo pipefail
+          for branch in ${BRANCHES}; do
+            head="${MIRROR_PREFIX}/${branch}"
+
+            # ベース（同名ブランチ）がミラー先に無ければ PR は作れない。
+            # ミラー先で `mirror/<branch>` からブランチを作るか手で作成してもらう。
+            if ! gh api "repos/${TARGET_REPO}/branches/${branch}" --silent 2>/dev/null; then
+              echo "::notice::${TARGET_REPO} に ${branch} が無いため PR はスキップしました（${head} は push 済み）。"
+              continue
+            fi
+
+            # 既に開いている PR があれば、head ブランチの push で内容は自動更新される。
+            existing="$(gh pr list -R "${TARGET_REPO}" --head "${head}" --base "${branch}" --state open --json url --jq '.[0].url // ""')"
+            if [ -n "${existing}" ]; then
+              echo "PR は既にオープン: ${existing}"
+              continue
+            fi
+
+            # 差分が無ければ PR は作らない（gh pr create がエラーになるため事前に判定）。
+            ahead="$(gh api "repos/${TARGET_REPO}/compare/${branch}...${head}" --jq '.ahead_by')"
+            if [ "${ahead}" = "0" ]; then
+              echo "${head} は ${branch} と同じ内容のため PR 不要"
+              continue
+            fi
+
+            url="$(gh pr create -R "${TARGET_REPO}" \
+              --head "${head}" --base "${branch}" \
+              --title "sync: ${GITHUB_REPOSITORY} の ${branch} を取り込む" \
+              --body "$(printf '%s\n' \
+                "個人リポジトリ [\`${GITHUB_REPOSITORY}\`](https://github.com/${GITHUB_REPOSITORY}) の \`${branch}\` を自動ミラーした PR です。" \
+                "" \
+                "- 生成元ワークフロー: \`.github/workflows/mirror.yml\`" \
+                "- この PR の head \`${head}\` はミラー専用ブランチです。直接コミットしないでください（次回の同期で上書きされます）。" \
+                "- **マージコミット**でマージしてください（squash / rebase merge だと次回の PR に同じコミットが再び載ります）。")")"
+            echo "PR を作成: ${url}"
+          done
