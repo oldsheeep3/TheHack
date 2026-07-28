@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# 個人リポジトリから最新を取り込んでミラーする（VPS 上で動く）。
+#
+#   mirror-sync              … 全ブランチ + 全タグ
+#   mirror-sync develop      … 指定ブランチだけ
+#
+# 通常は手元の pre-push フック → 中継 bare リポジトリの post-receive で自動的に走る。
+# これはその経路を使わずに push された分（別マシン・GitHub 上での編集など）を
+# 手動で拾うためのコマンド。
+set -euo pipefail
+
+MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
+REPO_DIR="${MIRROR_REPO_DIR:-$MIRROR_HOME/TheHack.git}"
+TARGET_REPO="${MIRROR_TARGET_REPO:-NxTEND-THE-HACK/2026-Team-38}"
+
+if [ $# -gt 0 ]; then
+  # 指定ブランチだけ取り込む。
+  for branch in "$@"; do
+    git -C "$REPO_DIR" fetch --quiet --no-tags personal "+refs/heads/${branch}:refs/heads/${branch}"
+  done
+  exec "$MIRROR_HOME/mirror.sh" "$@"
+fi
+
+# 個人リポジトリの全ブランチ・全タグに合わせる（--prune で消えたブランチも落とす）。
+git -C "$REPO_DIR" fetch --quiet --prune --force personal \
+  '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+
+mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/heads)
+"$MIRROR_HOME/mirror.sh" "${branches[@]}"
+
+# タグは同名でそのまま送る（PR は不要）。
+git -C "$REPO_DIR" push --quiet --tags hackathon
+echo "[mirror] タグを ${TARGET_REPO} へ同期しました"

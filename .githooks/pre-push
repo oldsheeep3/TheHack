@@ -1,0 +1,41 @@
+#!/bin/sh
+# origin（個人リポジトリ）へ push するとき、同じコミットを VPS 上の中継リポジトリへも送る。
+# VPS 側の post-receive がハッカソン用リポジトリへ mirror/<branch> を push し、PR を立てる。
+# 認証は VPS の gh ログインを使うので、GitHub にトークンを預ける必要がない。
+#
+# 有効化:
+#   git config core.hooksPath .githooks
+#   git config mirror.relay 'sheep:mirror/TheHack.git'   # 既定値。VPS を変えるならここ
+#
+# VPS に届かなくても push 自体は止めない（tailnet 外からでも作業できるように）。
+# 取りこぼしたぶんは VPS 側で `mirror-sync` を実行すれば追いつく。
+
+remote_name="$1"
+[ "$remote_name" = "origin" ] || exit 0
+
+relay="$(git config --get mirror.relay || true)"
+[ -n "$relay" ] || relay='sheep:mirror/TheHack.git'
+
+zero=0000000000000000000000000000000000000000
+refspecs=''
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/*) ;;
+    *) continue ;;
+  esac
+  # ブランチ削除はミラー先へ伝播させない。
+  [ "$local_sha" = "$zero" ] && continue
+  refspecs="$refspecs $local_sha:$remote_ref"
+done
+
+[ -n "$refspecs" ] || exit 0
+
+# shellcheck disable=SC2086  # refspecs は空白区切りで複数渡す
+if ! git push --quiet "$relay" $refspecs; then
+  echo "pre-push: ミラー中継 ($relay) への push に失敗しました。origin への push は続行します。" >&2
+  echo "pre-push: 復旧するには VPS で 'mirror-sync' を実行してください。" >&2
+fi
+
+exit 0

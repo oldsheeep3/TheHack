@@ -167,38 +167,63 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 
 ### ミラー（個人リポジトリ → ハッカソン用リポジトリ）
 
-開発を個人アカウントの public リポジトリで行い、ハッカソン用 private リポジトリ
-（`NxTEND-THE-HACK/2026-Team-38`）へ push のたびに反映する運用を
-[`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が担う。**片方向**（個人 → ハッカソン用）。
+開発を個人アカウントの public リポジトリ（`oldsheeep3/TheHack`）で行い、ハッカソン用 private
+リポジトリ（`NxTEND-THE-HACK/2026-Team-38`）へ push のたびに反映する。**片方向**（個人 → ハッカソン用）。
 
-push されたブランチ `X` に対して:
+GitHub Actions は使わない。**GitHub 側にトークンを一切預けず**、tailnet 上の VPS（`gh` ログイン済み）
+が自分の資格情報で push する構成にしている。
 
-1. ミラー先の **`mirror/X`**（本ワークフロー専用ブランチ）へ push
-2. `mirror/X` → `X` の PR を作成（既にオープンなら head の push で自動更新されるので何もしない）
-3. **マージは人間が行う**
+```text
+手元 ── git push origin ──→ oldsheeep3/TheHack (public)
+  └─ pre-push フック ─(SSH / tailnet)─→ VPS: ~/mirror/TheHack.git (中継 bare)
+                                          └ post-receive → mirror/X を push + PR 作成
+                                                              ↓
+                                              NxTEND-THE-HACK/2026-Team-38 (private)
+```
 
-つまりミラー先の `main` / `develop` へ直接 push も force push もしない。force は
-「元リポジトリで rebase / amend して `mirror/X` が fast-forward できなくなった」場合の
-フォールバックとして `mirror/*` に対してのみ使う。タグは同名でそのまま push（PR なし）。
-ミラー先の ref を削除することはない（`--mirror` は使わない）ので、ブランチ削除は同期されない。
+ブランチ `X` を push すると:
 
-ミラー先リポジトリ自身では **スキップされる**（`github.repository` を見て自己ループを防ぐ）ため、
-このリポジトリに置いたままでも無害。ミラー元に置かれたときだけ動く。
+1. 手元の [`.githooks/pre-push`](.githooks/pre-push) が同じコミットを VPS の中継リポジトリへ送る
+2. 中継リポジトリの `post-receive` が [`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼び、
+   ミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
+3. `mirror/X` → `X` の PR を作成（既にオープンなら head の push で自動更新されるので何もしない）
+4. **マージは人間が行う**
 
-ミラー元（個人リポジトリ）側でのセットアップ:
+ミラー先の `main` / `develop` へ直接 push も force push もしない。force は「手元で rebase / amend して
+`mirror/X` が fast-forward できなくなった」場合のフォールバックとして `mirror/*` に対してのみ使う。
+ミラー先の ref を削除することはないので、ブランチ削除は同期されない。
 
-| 種別 | 名前 | 値 |
+VPS に届かなくても `git push` 自体は止まらない（tailnet 外でも作業できる）。取りこぼしたぶん、
+別マシンからの push、GitHub 上での編集は、VPS 側で `mirror-sync` を実行すれば追いつく。
+
+| 場所 | もの | 役割 |
 | --- | --- | --- |
-| Secret | `MIRROR_TOKEN` | ミラー先に書き込める PAT。Fine-grained なら **Contents: RW + Pull requests: RW + Workflows: RW**（`.github/workflows/` を含むため Workflows 権限が必須）、Classic なら `repo` + `workflow` |
-| Variable（任意） | `MIRROR_TARGET_REPO` | ミラー先 `owner/repo`。未設定なら `NxTEND-THE-HACK/2026-Team-38` |
+| 手元 | `.githooks/pre-push` | `origin` への push を中継リポジトリへ複製 |
+| VPS | `~/mirror/TheHack.git` | 中継 bare リポジトリ（remote: `personal` / `hackathon`） |
+| VPS | `~/mirror/mirror.sh` | `mirror/X` の push と PR 作成（[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh)） |
+| VPS | `~/.local/bin/mirror-sync` | 個人リポジトリから取り込んで手動同期（[`tools/mirror/mirror-sync`](tools/mirror/mirror-sync)） |
 
-初回コピーやブランチをまとめて送りたいときは、Actions から **Mirror to hackathon repo** を
-`all_refs` にチェックを入れて手動実行する（全ブランチ + 全タグ）。
+セットアップ:
+
+```sh
+# VPS 側（gh でログイン済み・gh auth setup-git 済みであること）
+scp -r tools/mirror <vps>:~/mirror-install
+ssh <vps> 'bash ~/mirror-install/install-vps.sh'
+
+# 手元
+git config core.hooksPath .githooks
+git config mirror.relay 'sheep:mirror/TheHack.git'   # <vps>:<中継リポジトリのパス>
+
+# 手動同期（全ブランチ + 全タグ / ブランチ指定）
+ssh sheep 'bash -lc mirror-sync'
+ssh sheep 'bash -lc "mirror-sync develop"'
+```
 
 > - PR は **マージコミット**でマージすること。squash / rebase merge だと merge-base が進まず、
 >   次回の PR に同じコミットが再び載る。
 > - ミラー先に同名ブランチが無いと PR は作れない（`mirror/X` の push だけ行い notice を出す）。
 >   その場合はミラー先で `mirror/X` からブランチを作る。
+> - `core.hooksPath` は各クローンごとの設定なので、新しいマシンでは上記 2 行を再実行する。
 
 ## 共通プロトコル / ポート
 
