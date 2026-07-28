@@ -2,6 +2,10 @@
 **/softswitcher*/.git/
 /.history
 
+# Claude Code の設定。ここは独立した git リポジトリなので、この repo では追跡しない
+# （追跡していない状態で gitlink だけが index に残ると actions/checkout が exit 128 で落ちる）。
+/.claude/
+
 # .NET build artifacts
 [Bb]in/
 [Oo]bj/
