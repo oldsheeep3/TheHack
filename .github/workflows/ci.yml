@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  # PR は develop / エピックブランチ宛てを含め全て対象にする（タスクブランチ → 親 Epic の PR も走る）。
+  pull_request:
+  # 直 push はマージ先ブランチだけ。エージェント作業ブランチは PR 側で検証される。
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# 同一ブランチに新しい push が来たら古い実行は打ち切る。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET (build / format / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore HybridSwitcher.sln
+
+      # Switcher.App は WPF (net9.0-windows) だが EnableWindowsTargeting により Linux でもコンパイルできる
+      # （README「ビルド & テスト」参照）。実行時に必要な native/switcher-engine (libobs) は
+      # Windows + OBS 専用・.sln 外のため CI では扱わない。
+      #
+      # -warnaserror: 現状ソリューション全体が警告 0 なので、新規警告は PR で落とす。
+      - name: Build
+        run: dotnet build HybridSwitcher.sln --no-restore -c Release -warnaserror
+
+      - name: Format check
+        run: dotnet format HybridSwitcher.sln --verify-no-changes --no-restore
+
+      - name: Test
+        run: >-
+          dotnet test HybridSwitcher.sln --no-build -c Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory artifacts/test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore
+
+  phone-bridge:
+    name: phone-bridge (lint / build / test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/phone-bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/phone-bridge/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      # tsc -b（型チェック）+ vite build。型エラーもここで落ちる。
+      - name: Build
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm test
+
+      # path は working-directory ではなくリポジトリルートからの相対。
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-bridge-dist
+          path: apps/phone-bridge/dist
+
+  firmware:
+    name: Firmware host tests (gcc)
+    runs-on: ubuntu-latest
+    steps:
+      # ホストテストは I/O 非依存の純粋関数のみが対象で、ch32v003fun サブモジュール
+      # （RISC-V クロスビルド用）も Pico SDK も要らないため submodules は取得しない。
+      - uses: actions/checkout@v4
+
+      - name: Pico 2W controller
+        run: make -C firmware/pico2w-controller/test test
+
+      - name: Switcher module (CH32V003)
+        run: make -C firmware/switcher-module/test test
+
+  # ブランチ保護の必須チェックはこの 1 つを指定すれば足りる。
+  all-green:
+    name: All checks
+    if: always()
+    needs: [dotnet, phone-bridge, firmware]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all jobs succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
