@@ -1,6 +1,6 @@
 # HybridSwitcher — ハイブリッドIP映像スイッチャー
 
-[![CI](https://github.com/nxtend-the-hack/2026-team-38/actions/workflows/ci.yml/badge.svg)](https://github.com/nxtend-the-hack/2026-team-38/actions/workflows/ci.yml)
+[![CI](https://github.com/NxTEND-THE-HACK/2026-Team-38/actions/workflows/ci.yml/badge.svg)](https://github.com/NxTEND-THE-HACK/2026-Team-38/actions/workflows/ci.yml)
 
 既存機材（ATEM Mini）と自作ハードウェア（自作スイッチングモジュール群 + Pico 2W）、
 ネットワーク技術（SRT / NDI / WebAPI）を融合した、次世代のハイブリッドIP映像スイッチャーシステム。
@@ -168,7 +168,7 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 ### ミラー（個人リポジトリ → ハッカソン用リポジトリ）
 
 開発を個人アカウントの public リポジトリで行い、ハッカソン用 private リポジトリ
-（`nxtend-the-hack/2026-team-38`）へ push のたびに反映する運用を
+（`NxTEND-THE-HACK/2026-Team-38`）へ push のたびに反映する運用を
 [`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が担う。**片方向**（個人 → ハッカソン用）。
 
 push されたブランチ `X` に対して:
@@ -190,7 +190,7 @@ push されたブランチ `X` に対して:
 | 種別 | 名前 | 値 |
 | --- | --- | --- |
 | Secret | `MIRROR_TOKEN` | ミラー先に書き込める PAT。Fine-grained なら **Contents: RW + Pull requests: RW + Workflows: RW**（`.github/workflows/` を含むため Workflows 権限が必須）、Classic なら `repo` + `workflow` |
-| Variable（任意） | `MIRROR_TARGET_REPO` | ミラー先 `owner/repo`。未設定なら `nxtend-the-hack/2026-team-38` |
+| Variable（任意） | `MIRROR_TARGET_REPO` | ミラー先 `owner/repo`。未設定なら `NxTEND-THE-HACK/2026-Team-38` |
 
 初回コピーやブランチをまとめて送りたいときは、Actions から **Mirror to hackathon repo** を
 `all_refs` にチェックを入れて手動実行する（全ブランチ + 全タグ）。
