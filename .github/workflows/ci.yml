@@ -28,14 +28,14 @@ jobs:
     if: github.repository_owner != 'NxTEND-THE-HACK'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0.x'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotnet-test-results
           path: artifacts/test-results
@@ -77,9 +77,9 @@ jobs:
       run:
         working-directory: apps/phone-bridge
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -100,7 +100,7 @@ jobs:
 
       # path は working-directory ではなくリポジトリルートからの相対。
       - name: Upload dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phone-bridge-dist
           path: apps/phone-bridge/dist
@@ -112,7 +112,7 @@ jobs:
     steps:
       # ホストテストは I/O 非依存の純粋関数のみが対象で、ch32v003fun サブモジュール
       # （RISC-V クロスビルド用）も Pico SDK も要らないため submodules は取得しない。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Pico 2W controller
         run: make -C firmware/pico2w-controller/test test
