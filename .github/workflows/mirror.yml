@@ -1,0 +1,79 @@
+# ハッカソン用リポジトリへのミラーの起動役。tailnet に入って VPS へ SSH し、あとは
+# 向こうの mirror-sync に任せる（push も PR もマージも VPS 自身の gh ログインで行う）。
+# 必要な secret とセットアップ手順は README「ミラー」を参照。
+name: Mirror to hackathon repo
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  # 手動実行（push を伴わない取りこぼしの回収用）。
+  workflow_dispatch:
+
+# VPS 側の作業リポジトリは 1 つなので、ref をまたいで常に 1 本だけ流す。
+# 待機中の実行は後続に追い出されうるため、各実行は全ブランチを同期する。
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Trigger mirror on the VPS
+    # 自己ループ防止と、ブランチ削除（ミラー先の ref は消さない）のスキップ。
+    if: github.repository_owner != 'NxTEND-THE-HACK' && github.event.deleted != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          MIRROR_SSH_HOST: ${{ secrets.MIRROR_SSH_HOST }}
+          MIRROR_SSH_USER: ${{ secrets.MIRROR_SSH_USER }}
+          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+        run: |
+          set -eu
+          missing=''
+          for name in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET MIRROR_SSH_HOST MIRROR_SSH_USER MIRROR_SSH_KEY; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::secret が未設定です:${missing}（mirror.yml 冒頭のセットアップ手順を参照）"
+            exit 1
+          fi
+
+      # ephemeral ノードとして参加する（ジョブ終了後に自動で消える）。
+      - name: Join tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAG || 'tag:ci' }}
+
+      - name: Run mirror-sync over SSH
+        env:
+          SSH_HOST: ${{ secrets.MIRROR_SSH_HOST }}
+          SSH_USER: ${{ secrets.MIRROR_SSH_USER }}
+          SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.MIRROR_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/mirror_ci
+          chmod 600 ~/.ssh/mirror_ci
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::MIRROR_SSH_KNOWN_HOSTS が未設定です。ホスト鍵を検証せずに接続します。"
+            ssh-keyscan -T 30 "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          # mirror-sync は ~/.local/bin にあるのでログインシェルで起動する。
+          ssh -i ~/.ssh/mirror_ci \
+            -o BatchMode=yes -o ConnectTimeout=30 -o IdentitiesOnly=yes \
+            "${SSH_USER}@${SSH_HOST}" 'bash -lc mirror-sync'

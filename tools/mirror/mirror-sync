@@ -4,13 +4,14 @@
 #   mirror-sync              … 全ブランチ + 全タグ
 #   mirror-sync develop      … 指定ブランチだけ
 #
-# 通常は手元の pre-push フック → 中継 bare リポジトリの post-receive で自動的に走る。
-# これはその経路を使わずに push された分（別マシン・GitHub 上での編集など）を
-# 手動で拾うためのコマンド。
+# 通常は個人リポジトリ側の GitHub Actions（.github/workflows/mirror.yml）が tailnet 経由で
+# SSH してこれを叩く。手で叩くのは、その経路が使えないとき（Actions が落ちている、
+# tailnet に出られない、初回の一括コピーなど）。
 set -euo pipefail
 
 MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
 REPO_DIR="${MIRROR_REPO_DIR:-$MIRROR_HOME/TheHack.git}"
+MAP_FILE="${MIRROR_MAP_FILE:-$MIRROR_HOME/filter-map}"
 TARGET_REPO="${MIRROR_TARGET_REPO:-NxTEND-THE-HACK/2026-Team-38}"
 
 if [ $# -gt 0 ]; then
@@ -26,8 +27,27 @@ git -C "$REPO_DIR" fetch --quiet --prune --force personal \
   '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
 
 mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/heads)
-"$MIRROR_HOME/mirror.sh" "${branches[@]}"
 
-# タグは同名でそのまま送る（PR は不要）。
-git -C "$REPO_DIR" push --quiet --tags hackathon
-echo "[mirror] タグを ${TARGET_REPO} へ同期しました"
+# ブランチ側が一部失敗してもタグの同期までは済ませ、最後にまとめて失敗にする。
+failed=0
+"$MIRROR_HOME/mirror.sh" "${branches[@]}" || failed=1
+
+# タグは書き換え後のコミットを指す軽量タグとして同名で送る（PR は不要）。元のタグは
+# .github を含むフィルタ前のコミットを指しているので、そのまま送ると除いたはずの履歴が
+# ミラー先に入ってしまう。注釈タグはここで軽量タグになる（タグのメッセージは落ちる）。
+while read -r tag; do
+  [ -n "${tag}" ] || continue
+  target="$(git -C "$REPO_DIR" rev-list -n1 "refs/tags/${tag}")"
+  new="$([ -f "$MAP_FILE" ] && awk -v k="${target}" '$1 == k { v = $2 } END { if (v != "-") print v }' "$MAP_FILE")"
+  if [ -z "${new}" ]; then
+    echo "[mirror] notice: タグ ${tag} は書き換え後の履歴に対応するコミットが無いためスキップ"
+    continue
+  fi
+  if git -C "$REPO_DIR" push --quiet hackathon "${new}:refs/tags/${tag}"; then
+    echo "[mirror] タグ ${tag} を ${TARGET_REPO} へ同期しました"
+  else
+    echo "[mirror] warn: タグ ${tag} を push できませんでした（ミラー先で別のコミットを指している可能性）"
+  fi
+done < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/tags)
+
+exit "${failed}"

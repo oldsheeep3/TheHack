@@ -159,6 +159,13 @@ make             # ビルド + 実行（全テスト green で終了コード0�
 
 ブランチ保護の必須チェックには集約ジョブ **`All checks`** 1つを指定すればよい。
 
+**CI が走るのは個人リポジトリ（public）だけ。** ミラー先の `NxTEND-THE-HACK/2026-Team-38` は
+Free org の private リポジトリで Actions のランナーが割り当てられず、どのジョブも 0 ステップの
+まま即座に失敗する（ワークフロー側の問題ではなく org の Actions 枠の問題で、修正には org 管理者
+による支払い設定・repo の public 化・セルフホストランナー登録のいずれかが要る）。そのため全ジョブに
+`if: github.repository_owner != 'NxTEND-THE-HACK'` を付けて向こうでは skip させている。ジョブレベルの
+`if` はランナー要求より前に評価されるので、skip されたジョブは失敗扱いにならない。
+
 CI 対象外（ローカル/Windows でのみ検証可能）:
 
 - `native/switcher-engine`（libobs 依存・Windows + OBS 専用・`.sln` 外）と、それを要する App の実起動
@@ -170,38 +177,58 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 開発を個人アカウントの public リポジトリ（`oldsheeep3/TheHack`）で行い、ハッカソン用 private
 リポジトリ（`NxTEND-THE-HACK/2026-Team-38`）へ push のたびに反映する。**片方向**（個人 → ハッカソン用）。
 
-GitHub Actions は使わない。**GitHub 側にトークンを一切預けず**、tailnet 上の VPS（`gh` ログイン済み）
-が自分の資格情報で push する構成にしている。
+**ミラー先へ書けるトークンは GitHub に預けない。** 実際に push するのは tailnet 上の VPS（`gh`
+ログイン済み）で、自分の資格情報を使う。GitHub Actions はその VPS に SSH して起動をかけるだけ
+なので、この public リポジトリに置く secret は tailnet への参加情報と SSH 鍵だけで済む。
+
+**`.github/` は同期しない。** 個人リポジトリ側の CI 設定をハッカソン用リポジトリへ持ち込まないよう、
+ミラーする前に履歴ごと除去する（ミラー先にはファイルも過去の blob も残らない）。
 
 ```text
 手元 ── git push origin ──→ oldsheeep3/TheHack (public)
-  └─ pre-push フック ─(SSH / tailnet)─→ VPS: ~/mirror/TheHack.git (中継 bare)
-                                          └ post-receive → mirror/X を push + PR 作成
+                              └ Actions: mirror.yml
+                                  ├ tailscale/github-action で tailnet に参加
+                                  └ ssh ──→ VPS: mirror-sync <branch>
+                                              ├ 個人リポジトリから fetch（~/mirror/TheHack.git）
+                                              ├ filter.sh  … .github を履歴ごと除いて書き換え
+                                              └ mirror.sh  … mirror/X を push + PR 作成
                                                               ↓
                                               NxTEND-THE-HACK/2026-Team-38 (private)
 ```
 
 ブランチ `X` を push すると:
 
-1. 手元の [`.githooks/pre-push`](.githooks/pre-push) が同じコミットを VPS の中継リポジトリへ送る
-2. 中継リポジトリの `post-receive` が [`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼び、
-   ミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
-3. `mirror/X` → `X` の PR を作成（既にオープンなら head の push で自動更新されるので何もしない）
-4. **マージは人間が行う**
+1. [`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が tailnet に ephemeral ノードとして参加し、
+   VPS へ SSH して [`mirror-sync`](tools/mirror/mirror-sync) を実行する
+2. VPS が個人リポジトリから fetch し、[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼ぶ
+3. [`tools/mirror/filter.sh`](tools/mirror/filter.sh) が `X` の履歴を `.github/` 抜きに書き換える
+   （`.github/` しか触っていないコミットは消える）
+4. 書き換え後の tip をミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
+5. `mirror/X` → `X` の PR を作成（既にオープンならそれを使う）し、**マージコミットでマージする**
+
+起点が GitHub 側にあるので、どのマシンから push しても（GitHub 上で直接編集しても）ミラーされる。
+1 回の実行で全ブランチ + 全タグを同期する（ミラーの実行は `concurrency` で常に 1 本に絞られ、
+待機中の実行は後続に追い出されうるため、押されたブランチだけに絞ると取りこぼす）。
+
+書き換えは著者・コミッタ・日時・メッセージをそのまま引き継ぐので**決定的**で、同じコミットからは
+必ず同じ SHA が出る。よって 2 回目以降も `mirror/X` へ fast-forward で push できる。ただし
+**ミラー先のコミット SHA は個人リポジトリ側とは一致しない**（署名も落ちる）。
 
 ミラー先の `main` / `develop` へ直接 push も force push もしない。force は「手元で rebase / amend して
 `mirror/X` が fast-forward できなくなった」場合のフォールバックとして `mirror/*` に対してのみ使う。
 ミラー先の ref を削除することはないので、ブランチ削除は同期されない。
 
-VPS に届かなくても `git push` 自体は止まらない（tailnet 外でも作業できる）。取りこぼしたぶん、
-別マシンからの push、GitHub 上での編集は、VPS 側で `mirror-sync` を実行すれば追いつく。
+Actions が使えないとき（ワークフローの失敗、tailnet の不調、初回の一括コピー）は VPS 側で
+`mirror-sync` を直接実行すれば追いつく。
 
 | 場所 | もの | 役割 |
 | --- | --- | --- |
-| 手元 | `.githooks/pre-push` | `origin` への push を中継リポジトリへ複製 |
-| VPS | `~/mirror/TheHack.git` | 中継 bare リポジトリ（remote: `personal` / `hackathon`） |
+| GitHub | `.github/workflows/mirror.yml` | tailnet に参加して VPS へ SSH し `mirror-sync` を起動 |
+| VPS | `~/mirror/TheHack.git` | 書き換え作業用の bare リポジトリ（remote: `personal` / `hackathon`） |
 | VPS | `~/mirror/mirror.sh` | `mirror/X` の push と PR 作成（[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh)） |
-| VPS | `~/.local/bin/mirror-sync` | 個人リポジトリから取り込んで手動同期（[`tools/mirror/mirror-sync`](tools/mirror/mirror-sync)） |
+| VPS | `~/mirror/filter.sh` | `.github/` を履歴ごと除いた履歴へ書き換え（[`tools/mirror/filter.sh`](tools/mirror/filter.sh)） |
+| VPS | `~/mirror/filter-map` | 元コミット → 書き換え後コミットの対応表（追記のみ。増分処理に使う） |
+| VPS | `~/.local/bin/mirror-sync` | 個人リポジトリから取り込んで同期（[`tools/mirror/mirror-sync`](tools/mirror/mirror-sync)） |
 
 セットアップ:
 
@@ -210,20 +237,43 @@ VPS に届かなくても `git push` 自体は止まらない（tailnet 外で�
 scp -r tools/mirror <vps>:~/mirror-install
 ssh <vps> 'bash ~/mirror-install/install-vps.sh'
 
-# 手元
-git config core.hooksPath .githooks
-git config mirror.relay 'sheep:mirror/TheHack.git'   # <vps>:<中継リポジトリのパス>
+# CI 用の SSH 鍵を作って公開鍵を VPS に置く
+ssh-keygen -t ed25519 -N '' -f mirror_ci
+ssh-copy-id -i mirror_ci.pub <vps>
 
 # 手動同期（全ブランチ + 全タグ / ブランチ指定）
 ssh sheep 'bash -lc mirror-sync'
 ssh sheep 'bash -lc "mirror-sync develop"'
 ```
 
-> - PR は **マージコミット**でマージすること。squash / rebase merge だと merge-base が進まず、
->   次回の PR に同じコミットが再び載る。
+個人リポジトリの Settings → Secrets and variables → Actions に登録する secret:
+
+| secret | 中身 |
+| --- | --- |
+| `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET` | Tailscale の OAuth クライアント（scope `auth_keys` write / tag `tag:ci`） |
+| `MIRROR_SSH_HOST` / `MIRROR_SSH_USER` | VPS の tailnet 名（or 100.x）とユーザー名 |
+| `MIRROR_SSH_KEY` | 上で作った秘密鍵 `mirror_ci` の中身 |
+| `MIRROR_SSH_KNOWN_HOSTS` | VPS のホスト鍵（`ssh-keyscan <host>` の出力）。任意だが推奨 |
+
+tailnet の ACL で `tag:ci` から VPS の 22/tcp を許可しておくこと。
+
+> - マージは **マージコミット**で行う（squash / rebase merge だと merge-base が進まず、次回の
+>   PR に同じコミットが再び載る）。ブランチ保護で弾かれた場合は `gh pr merge --admin` で通す。
 > - ミラー先に同名ブランチが無いと PR は作れない（`mirror/X` の push だけ行い notice を出す）。
 >   その場合はミラー先で `mirror/X` からブランチを作る。
-> - `core.hooksPath` は各クローンごとの設定なので、新しいマシンでは上記 2 行を再実行する。
+> - 手動で `mirror-sync` を叩くときは Actions の実行と重ならないようにする（作業リポジトリを共有
+>   していて、排他はしていない）。
+> - 除外パスは `MIRROR_EXCLUDE`（トップレベル名を空白区切り、既定 `.github`）で変えられる。
+>   変更したら `filter-map` を消して履歴を作り直すこと。
+> - タグは書き換え後のコミットを指す**軽量タグ**として送る（注釈タグのメッセージは落ちる）。
+> - `refs/filtered/*` を消してしまったら `filter-map` も消す。残したままだと、gc で消えた
+>   コミットを参照して失敗する。
+
+**`.github/` 除去への切り替え時に一度だけ必要な作業**: 書き換えで SHA が変わるため、ミラー先の
+`main` / `develop` に除去前の履歴が入っていると `mirror/X` と共通の祖先が無くなり、PR を作っても
+マージできない。`mirror.sh` はこれを検出して警告を出し PR をスキップするので、ミラー先の
+`main` / `develop` を一度 `mirror/main` / `mirror/develop` の内容に合わせ直す（ブランチ保護を
+外して force push するか、ミラー先で作り直す）。以降は通常どおり fast-forward で進む。
 
 ## 共通プロトコル / ポート
 

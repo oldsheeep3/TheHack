@@ -3,37 +3,73 @@
 #
 #   mirror.sh <branch>...
 #
-# 中継 bare リポジトリの refs/heads/<branch> を、ミラー先の mirror/<branch> へ push し、
-# mirror/<branch> → <branch> の PR を作成する（既にオープンなら何もしない）。
-# 認証は VPS の gh ログイン（git の credential helper が gh を呼ぶ）を使うので、
-# GitHub 側に secret を置く必要はない。
+# 作業用 bare リポジトリの refs/heads/<branch> を filter.sh で .github 抜きの履歴に書き換え、
+# ミラー先の mirror/<branch> へ push し、mirror/<branch> → <branch> の PR を作って
+# マージコミットでマージするところまでやる（人手は要らない）。
+# 認証は VPS の gh ログイン（git の credential helper が gh を呼ぶ）。
 set -euo pipefail
 
-REPO_DIR="${MIRROR_REPO_DIR:-$HOME/mirror/TheHack.git}"
+MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
+REPO_DIR="${MIRROR_REPO_DIR:-$MIRROR_HOME/TheHack.git}"
 TARGET_REPO="${MIRROR_TARGET_REPO:-NxTEND-THE-HACK/2026-Team-38}"
 SOURCE_REPO="${MIRROR_SOURCE_REPO:-oldsheeep3/TheHack}"
 PREFIX="${MIRROR_PREFIX:-mirror}"
 
-# post-receive フックから呼ばれると GIT_DIR 等が環境に残っているので落とす。
+# 呼び出し元の環境に git の変数が残っていると -C が効かないので落とす。
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_QUARANTINE_PATH
 
 log() { printf '[mirror] %s\n' "$*"; }
 git_() { git -C "$REPO_DIR" "$@"; }
 
-# refs/heads/<branch> を mirror/<branch> へ。通常は fast-forward push で足り、
-# 手元で rebase/amend された場合だけ force に落とす（対象は mirror/* のみ）。
+# 書き換えは決定的（filter.sh 参照）なので通常は fast-forward で足り、元の履歴が
+# rebase/amend された場合だけ force に落とす（対象は mirror/* のみ）。
+# 戻り値: 0 = push した / 1 = ミラーするものが無い / 2 = 失敗
 push_branch() {
-  local branch="$1" dst="refs/heads/${PREFIX}/$1"
-  log "${branch} -> ${PREFIX}/${branch}"
-  if git_ push --quiet hackathon "refs/heads/${branch}:${dst}" 2>/dev/null; then
+  local branch="$1" dst="refs/heads/${PREFIX}/$1" src
+  if ! src="$("${MIRROR_HOME}/filter.sh" "${branch}")"; then
+    log "error: ${branch} の履歴書き換えに失敗しました"
+    return 2
+  fi
+  if [ -z "${src}" ]; then
+    log "notice: ${branch} は除外パスしか含まないためミラーするものがありません"
+    return 1
+  fi
+  log "${branch} -> ${PREFIX}/${branch} (${src})"
+  if git_ push --quiet hackathon "${src}:${dst}" 2>/dev/null; then
     return 0
   fi
   log "warn: ${PREFIX}/${branch} は fast-forward できないため force で上書きします（履歴が書き換わった可能性）"
-  git_ push --quiet --force hackathon "refs/heads/${branch}:${dst}"
+  git_ push --quiet --force hackathon "${src}:${dst}" || return 2
 }
 
-open_pr() {
-  local branch="$1" head="${PREFIX}/$1" existing url
+# PR を「マージコミット」でマージする。squash / rebase merge だと merge-base が進まず、
+# 次回の PR に同じコミットが再び載る。
+# 作成直後は GitHub 側でマージ可能かの計算が終わっておらず一時的に失敗するので数回待つ。
+# 保護ブランチで弾かれた場合だけ --admin にフォールバックする（gh のログインが管理者権限を
+# 持っていなければここも失敗し、warn を出して次のブランチへ進む）。
+merge_pr() {
+  local pr="$1" head="$2" out attempt
+  for attempt in 1 2 3 4 5; do
+    if out="$(gh pr merge -R "${TARGET_REPO}" "${pr}" --merge --delete-branch=false 2>&1)"; then
+      log "PR #${pr} をマージしました"
+      return 0
+    fi
+    if [ "${attempt}" -lt 5 ]; then sleep 5; fi
+  done
+
+  if out="$(gh pr merge -R "${TARGET_REPO}" "${pr}" --merge --admin --delete-branch=false 2>&1)"; then
+    log "PR #${pr} をマージしました（ブランチ保護を --admin で通した）"
+    return 0
+  fi
+
+  log "warn: PR #${pr} (${head}) をマージできませんでした。手でマージしてください:"
+  printf '%s\n' "${out}" | sed 's/^/[mirror]        /'
+  return 1
+}
+
+# mirror/<branch> → <branch> の PR を用意して（既にオープンならそれを使って）マージする。
+sync_pr() {
+  local branch="$1" head="${PREFIX}/$1" pr url ahead
 
   # ベース（同名ブランチ）がミラー先に無ければ PR は作れない。
   if ! gh api "repos/${TARGET_REPO}/branches/${branch}" --silent 2>/dev/null; then
@@ -41,37 +77,58 @@ open_pr() {
     return 0
   fi
 
-  # 既に開いている PR があれば、head ブランチの push で内容は自動更新される。
-  existing="$(gh pr list -R "${TARGET_REPO}" --head "${head}" --base "${branch}" \
-    --state open --json url --jq '.[0].url // ""')"
-  if [ -n "${existing}" ]; then
-    log "PR は既にオープン: ${existing}"
+  # 履歴を書き換えている都合上、ミラー先の <branch> にフィルタ前の履歴しか無いと共通の祖先が
+  # 無く、PR を作ってもマージできない（compare も 404 になる）。切り替えの初回に一度だけ起きる。
+  if ! ahead="$(gh api "repos/${TARGET_REPO}/compare/${branch}...${head}" --jq '.ahead_by' 2>/dev/null)"; then
+    log "warn: ${branch}...${head} を比較できません。共通の祖先が無い可能性があります"
+    log "      （.github 除去への切り替え直後など）。その場合はミラー先の ${branch} を"
+    log "      ${head} の内容に合わせ直してください。PR はスキップします。"
     return 0
   fi
 
   # 差分が無ければ PR は作らない（gh pr create がエラーになるため事前に判定）。
-  if [ "$(gh api "repos/${TARGET_REPO}/compare/${branch}...${head}" --jq '.ahead_by')" = "0" ]; then
+  if [ "${ahead}" = "0" ]; then
     log "${head} は ${branch} と同じ内容のため PR 不要"
     return 0
   fi
 
-  url="$(gh pr create -R "${TARGET_REPO}" \
-    --head "${head}" --base "${branch}" \
-    --title "sync: ${SOURCE_REPO} の ${branch} を取り込む" \
-    --body "$(printf '%s\n' \
-      "個人リポジトリ [\`${SOURCE_REPO}\`](https://github.com/${SOURCE_REPO}) の \`${branch}\` を自動ミラーした PR です。" \
-      "" \
-      "- 生成元: VPS 上の \`tools/mirror/mirror.sh\`（GitHub Actions は使わない）" \
-      "- この PR の head \`${head}\` はミラー専用ブランチです。直接コミットしないでください（次回の同期で上書きされます）。" \
-      "- **マージコミット**でマージしてください（squash / rebase merge だと次回の PR に同じコミットが再び載ります）。")")"
-  log "PR を作成: ${url}"
+  # 既に開いている PR があれば、head ブランチの push で内容は更新済み。
+  pr="$(gh pr list -R "${TARGET_REPO}" --head "${head}" --base "${branch}" \
+    --state open --json number --jq '.[0].number // ""')"
+
+  if [ -n "${pr}" ]; then
+    log "オープン中の PR #${pr} を使う"
+  else
+    url="$(gh pr create -R "${TARGET_REPO}" \
+      --head "${head}" --base "${branch}" \
+      --title "sync: ${SOURCE_REPO} の ${branch} を取り込む" \
+      --body "$(printf '%s\n' \
+        "個人リポジトリ [\`${SOURCE_REPO}\`](https://github.com/${SOURCE_REPO}) の \`${branch}\` を自動ミラーした PR です。" \
+        "" \
+        "- 生成元: VPS 上の \`tools/mirror/mirror.sh\`。作成後そのままマージコミットでマージされます。" \
+        "- \`.github/\` は同期対象外です。履歴ごと除いてあるので、コミット SHA は個人リポジトリ側と一致しません。" \
+        "- この PR の head \`${head}\` はミラー専用ブランチです。直接コミットしないでください（次回の同期で上書きされます）。")")"
+    pr="${url##*/}"
+    log "PR を作成: ${url}"
+  fi
+
+  merge_pr "${pr}" "${head}"
 }
 
+failed=0
 for branch in "$@"; do
   # mirror/* は自分が作った複製なので送り返さない。
   case "${branch}" in
     '' | "${PREFIX}"/*) continue ;;
   esac
-  push_branch "${branch}"
-  open_pr "${branch}"
+  rc=0
+  push_branch "${branch}" || rc=$?
+  case "${rc}" in
+    0) sync_pr "${branch}" || failed=1 ;;
+    1) ;;
+    *) failed=1 ;;
+  esac
 done
+
+# 通らなかったブランチがあれば呼び出し元（Actions のジョブ）を赤くする。
+exit "${failed}"

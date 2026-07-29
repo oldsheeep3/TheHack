@@ -1,5 +1,6 @@
 # シェルスクリプトは作業ツリーでも常に LF。Windows で CRLF に変換されると
-# shebang が壊れて git のフックも VPS 上のミラースクリプトも動かなくなる。
+# shebang が壊れて VPS 上のミラースクリプトが動かなくなる。
 *.sh text eol=lf
-.githooks/** text eol=lf
 tools/mirror/** text eol=lf
+# ワークフローの run: ブロックは Linux ランナーの bash が読むので CRLF を持ち込まない。
+.github/workflows/** text eol=lf
