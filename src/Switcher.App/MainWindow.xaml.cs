@@ -18,9 +18,10 @@ using Forms = System.Windows.Forms;
 namespace Switcher.App;
 
 /// <summary>
-/// Operator console, laid out as a studio dock (design direction B): a program/preview monitor pair for
-/// the selected M/E with its transition controls underneath, a read-only multiview alongside, and four
-/// titled docks along the bottom — Sources, Buses, Outputs, Controller.
+/// Operator console, laid out as a studio dock (design direction B): both M/E buses show their own
+/// preview/program monitor pair simultaneously (splittable rows so the operator picks how much room each
+/// gets), a shared transition bar underneath, a read-only multiview alongside, and four titled docks
+/// along the bottom — Sources, Buses, Outputs, Controller.
 ///
 /// Arranging the multiview moved out to <see cref="MultiviewSettingsWindow"/>: it is a setup-time job,
 /// and keeping the merge/split editor on the live screen cost the program monitors the space they need.
@@ -36,7 +37,9 @@ public partial class MainWindow : Window
     private readonly AtemController _atemController;
     private readonly FramePumpService _framePump;
     private readonly IDeviceQueryService _deviceQueryService;
-    private readonly AppConfig _config;
+    /// <summary>Mutable so an operator preference change (stage view, console display) both applies now
+    /// and is persisted on the next save — the field is the authoritative in-memory copy.</summary>
+    private AppConfig _config;
     private readonly ILogger<MainWindow> _logger;
 
     private readonly ObservableCollection<SourceTileViewModel> _tiles = [];
@@ -47,7 +50,6 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<AudioOutputRowViewModel> _audioRows = [];
     private readonly ObservableCollection<ModuleMappingRowViewModel> _moduleRows = [];
     private readonly ObservableCollection<DisplayOption> _availableDisplays = [];
-    private readonly ObservableCollection<DeviceInfo> _devices = [];
 
     private readonly ObservableCollection<BusControlViewModel> _buses =
     [
@@ -62,28 +64,14 @@ public partial class MainWindow : Window
     private MultiviewFullscreenWindow? _multiviewFullscreen;
     private MultiviewSettingsWindow? _multiviewSettings;
     private MixSourceWindow? _mixEditor;
-    private SrtSetupInfo? _lastSrtSetup;
+    private AddSourceWindow? _addSourceWindow;
     private int _operatorDisplayIndex;
     private bool _uiReady;
 
-    /// <summary>Which M/E the big program/preview monitors and the transition bar follow. Both buses
-    /// stay fully operable from the Buses dock regardless.</summary>
+    /// <summary>Which M/E the transition bar and keyboard shortcuts act on. Both ME rows are visible at
+    /// once, and both buses stay fully operable from the Buses dock — the "focused" ME just picks who
+    /// receives Space/A/Escape/1-9 and the shared CUT/AUTO buttons.</summary>
     private ProgramBus _stageBus = ProgramBus.Pgm1;
-
-    /// <summary>Capture modes offered for a webcam source. The first entry leaves win-dshow on its
-    /// device-preferred media type; the rest map to <c>WebcamConfig.Format</c> ("WxH@FPS").</summary>
-    private static readonly (string Label, string? Format)[] WebcamCaptureModes =
-    [
-        ("Device default", null),
-        ("1920x1080 @ 60", "1920x1080@60"),
-        ("1920x1080 @ 30", "1920x1080@30"),
-        ("1280x720 @ 60", "1280x720@60"),
-        ("1280x720 @ 30", "1280x720@30"),
-        ("960x540 @ 30", "960x540@30"),
-        ("640x480 @ 30", "640x480@30"),
-    ];
-
-    private const int DeviceQueryDefaultLatencyMs = 40;
 
     public MainWindow(
         AppOrchestrator orchestrator,
@@ -111,11 +99,8 @@ public partial class MainWindow : Window
         OutputsControl.ItemsSource = _outputRows;
         AudioOutputsControl.ItemsSource = _audioRows;
         ModulesControl.ItemsSource = _moduleRows;
-        DeviceCombo.ItemsSource = _devices;
         BusesControl.ItemsSource = _buses;
         OperatorDisplayCombo.ItemsSource = _availableDisplays;
-        WebcamFormatCombo.ItemsSource = WebcamCaptureModes.Select(m => m.Label).ToList();
-        WebcamFormatCombo.SelectedIndex = 0;
 
         RefreshDisplays();
 
@@ -155,9 +140,8 @@ public partial class MainWindow : Window
         AtemStateText.Text = $"ATEM {_atemController.State}";
 
         SelectOperatorDisplay();
-        NewSourceTypeCombo.SelectedIndex = 0;
+        ApplyStageViewMode(_config.StageViewMode);
         _uiReady = true;
-        OnSourceTypeChanged(this, null!);
         RefreshBusState();
 
         PreviewKeyDown += OnConsoleKeyDown;
@@ -383,9 +367,12 @@ public partial class MainWindow : Window
 
     private void UpdateStageMonitors()
     {
-        var isMe1 = _stageBus == ProgramBus.Pgm1;
-        ProgramImage.Source = _previewBitmaps.Get(isMe1 ? "PGM1" : "PGM2");
-        PreviewImage.Source = _previewBitmaps.Get(isMe1 ? "PVW1" : "PVW2");
+        // Both ME rows are visible simultaneously since v3; the Me1/Me2 radio only decides which one
+        // receives the transition bar and keyboard shortcuts.
+        Preview1Image.Source = _previewBitmaps.Get("PVW1");
+        Program1Image.Source = _previewBitmaps.Get("PGM1");
+        Preview2Image.Source = _previewBitmaps.Get("PVW2");
+        Program2Image.Source = _previewBitmaps.Get("PGM2");
     }
 
     // ── bus strips ──────────────────────────────────────────────────────────────
@@ -405,7 +392,7 @@ public partial class MainWindow : Window
         RefreshBusState();
     }
 
-    /// <summary>Mirrors the orchestrator's authoritative PGM/PVW membership onto the strips, the stage
+    /// <summary>Mirrors the orchestrator's authoritative PGM/PVW membership onto the strips, both stage
     /// captions and the multiview frames — including the toggle states, so a bus driven from the Web API
     /// or a HID module switch doesn't leave this window describing a staging set that is no longer real.</summary>
     private void RefreshBusState()
@@ -419,14 +406,23 @@ public partial class MainWindow : Window
             bus.ProgramText = DescribeSources(program);
             bus.PreviewText = DescribeSources(preview);
 
-            if (bus.Bus == _stageBus)
+            // Both ME rows have their own captions since v3.
+            var programCaption = program.Count == 0
+                ? $"{bus.ProgramLabel} — off air"
+                : $"{bus.ProgramLabel} — {bus.ProgramText}";
+            var previewCaption = preview.Count == 0
+                ? $"{bus.PreviewLabel} — nothing staged"
+                : $"{bus.PreviewLabel} — {bus.PreviewText}";
+
+            if (bus.Bus == ProgramBus.Pgm1)
             {
-                ProgramCaption.Text = program.Count == 0
-                    ? $"{bus.ProgramLabel} — off air"
-                    : $"{bus.ProgramLabel} — {bus.ProgramText}";
-                PreviewCaption.Text = preview.Count == 0
-                    ? $"{bus.PreviewLabel} — nothing staged"
-                    : $"{bus.PreviewLabel} — {bus.PreviewText}";
+                Program1Caption.Text = programCaption;
+                Preview1Caption.Text = previewCaption;
+            }
+            else
+            {
+                Program2Caption.Text = programCaption;
+                Preview2Caption.Text = previewCaption;
             }
         }
 
@@ -695,6 +691,68 @@ public partial class MainWindow : Window
         _multiviewFullscreen.ShowFullscreen();
     }
 
+    // ── stage view preference ──────────────────────────────────────────────────
+
+    /// <summary>Menu-driven radio: "Both / ME1 only / ME2 only". IsCheckable=True lets the item show a
+    /// tick when it is the active mode; we untick the siblings ourselves since WPF has no built-in
+    /// radio semantics for menu items.</summary>
+    private void OnStageViewChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string tag } || !Enum.TryParse<StageViewMode>(tag, out var mode))
+        {
+            return;
+        }
+
+        // A second click on the already-active item would otherwise uncheck it and leave no mode
+        // selected. Snap it back on and stop.
+        if (mode == _config.StageViewMode)
+        {
+            SyncStageViewMenu(mode);
+            return;
+        }
+
+        ApplyStageViewMode(mode);
+        _config = _config with { StageViewMode = mode };
+        AppConfigLoader.Save(AppContext.BaseDirectory, _config, _logger);
+    }
+
+    /// <summary>Resizes the stage rows and re-syncs the menu ticks. Called at startup with the persisted
+    /// value and after every operator selection.</summary>
+    private void ApplyStageViewMode(StageViewMode mode)
+    {
+        // Star rows for what should be visible, zero for what should not. Collapsing the splitter row
+        // too keeps a 6px seam from staying visible when only one ME is showing.
+        var star = new GridLength(1, GridUnitType.Star);
+        var zero = new GridLength(0);
+        switch (mode)
+        {
+            case StageViewMode.Me1Only:
+                StageMe1Row.Height = star;
+                StageSplitterRow.Height = zero;
+                StageMe2Row.Height = zero;
+                break;
+            case StageViewMode.Me2Only:
+                StageMe1Row.Height = zero;
+                StageSplitterRow.Height = zero;
+                StageMe2Row.Height = star;
+                break;
+            default:  // Both
+                StageMe1Row.Height = star;
+                StageSplitterRow.Height = new GridLength(6);
+                StageMe2Row.Height = star;
+                break;
+        }
+
+        SyncStageViewMenu(mode);
+    }
+
+    private void SyncStageViewMenu(StageViewMode mode)
+    {
+        StageViewBothItem.IsChecked = mode == StageViewMode.Both;
+        StageViewMe1Item.IsChecked = mode == StageViewMode.Me1Only;
+        StageViewMe2Item.IsChecked = mode == StageViewMode.Me2Only;
+    }
+
     // ── operator display ────────────────────────────────────────────────────────
 
     private void OnMoveOperatorClick(object sender, RoutedEventArgs e)
@@ -711,7 +769,8 @@ public partial class MainWindow : Window
         _operatorDisplayIndex = displayIndex;
         PositionOnDisplay(displayIndex, activate: true);
         SelectOperatorDisplay();
-        AppConfigLoader.Save(AppContext.BaseDirectory, _config with { OperatorDisplayIndex = displayIndex }, _logger);
+        _config = _config with { OperatorDisplayIndex = displayIndex };
+        AppConfigLoader.Save(AppContext.BaseDirectory, _config, _logger);
     }
 
     private void PositionOnDisplay(int displayIndex, bool activate)
@@ -754,292 +813,46 @@ public partial class MainWindow : Window
 
     // ── add source ──────────────────────────────────────────────────────────────
 
-    /// <summary>Opens the add-source form over the Sources dock (the toolbar's "+ Add source" and the
-    /// dock's "+" both land here).</summary>
-    private void OnFocusAddSourceClick(object sender, RoutedEventArgs e) => ShowAddSourcePanel(true);
-
-    private void OnToggleAddSourceClick(object sender, RoutedEventArgs e) =>
-        ShowAddSourcePanel(AddSourcePanel.Visibility != Visibility.Visible);
-
-    private void OnCloseAddSourceClick(object sender, RoutedEventArgs e) => ShowAddSourcePanel(false);
-
-    private void ShowAddSourcePanel(bool show)
+    /// <summary>Opens the modal add-source dialog (both the toolbar's "+ Add source" and the Sources
+    /// dock's "+" land here). Extracted from an overlay panel in v3 so the source list stays visible
+    /// while the operator is filling the form in.</summary>
+    private async void OnOpenAddSourceClick(object sender, RoutedEventArgs e)
     {
-        AddSourcePanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceToggle.Content = show ? "✕" : "+";
-        AddSourceToggle.ToolTip = show ? "Close the add-source form" : "Add a source";
-
-        if (!show)
+        if (_addSourceWindow is { } existing)
         {
+            existing.Activate();
             return;
         }
 
-        // Re-scan on open so the device list reflects anything plugged in since the app started.
-        OnSourceTypeChanged(this, null!);
-        NewSourceNameBox.Focus();
-        NewSourceNameBox.SelectAll();
-    }
-
-    private void OnSourceTypeChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_uiReady)
-        {
-            return;
-        }
-
-        var type = SelectedSourceTypeText();
-        var usesDevice = type is "WEBCAM" or "NDI";
-        DeviceSelectPanel.Visibility = usesDevice ? Visibility.Visible : Visibility.Collapsed;
-        WebcamFormatPanel.Visibility = type == "WEBCAM" ? Visibility.Visible : Visibility.Collapsed;
-        SrtPanel.Visibility = type == "SRT" ? Visibility.Visible : Visibility.Collapsed;
-        ImagePanel.Visibility = type == "IMAGE" ? Visibility.Visible : Visibility.Collapsed;
-        HtmlPanel.Visibility = type == "HTML" ? Visibility.Visible : Visibility.Collapsed;
-
-        if (type == "SRT")
-        {
-            _ = LoadSrtSetupAsync();
-        }
-        else if (usesDevice)
-        {
-            _ = RescanDevicesAsync();
-        }
-    }
-
-    private void OnRescanDevicesClick(object sender, RoutedEventArgs e) => _ = RescanDevicesAsync();
-
-    private async Task RescanDevicesAsync()
-    {
-        var queryType = SelectedDeviceQueryType();
-        if (queryType is not { } type)
-        {
-            return;
-        }
-
-        IReadOnlyList<DeviceInfo> devices;
+        var window = new AddSourceWindow(_deviceQueryService, _config, _logger) { Owner = this };
+        _addSourceWindow = window;
         try
         {
-            devices = await _deviceQueryService.EnumerateAsync(type).ConfigureAwait(true);
+            if (window.ShowDialog() != true || window.Result is not { } definition)
+            {
+                return;
+            }
+
+            try
+            {
+                await _orchestrator.AddSourceAsync(definition).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                // The engine rejects a source it cannot create natively (e.g. an NDI source with DistroAV
+                // absent). Without this catch the exception escapes an async void handler and takes the
+                // whole app down instead of telling the operator what to install.
+                _logger.LogWarning(ex, "Adding source {SourceId} failed.", definition.Id);
+                System.Windows.MessageBox.Show(ex.Message, "Add source", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            RefreshAvailableTokensAndIds();
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogWarning(ex, "Device enumeration failed for {Type}.", type);
-            devices = Array.Empty<DeviceInfo>();
+            _addSourceWindow = null;
         }
-
-        _devices.Clear();
-        foreach (var device in devices)
-        {
-            _devices.Add(device);
-        }
-
-        // An empty NDI list almost always means the DistroAV (obs-ndi) OBS plugin is missing rather than
-        // "no NDI senders on the network": without it libobs has no ndi_source to enumerate at all, and
-        // the NDI/VCAM2 output sinks silently fail to start too. Say so instead of the generic hint.
-        NoDevicesText.Text = type == DeviceQueryType.Ndi
-            ? "No NDI sources. If this list is always empty, install the DistroAV (obs-ndi) plugin into " +
-              "OBS Studio — NDI input and the NDI outputs need it — then restart the app."
-            : "No devices found. Connect the device, then press Rescan.";
-        NoDevicesText.Visibility = _devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (_devices.Count > 0)
-        {
-            DeviceCombo.SelectedIndex = 0;
-        }
-    }
-
-    private async Task LoadSrtSetupAsync()
-    {
-        SrtSetupInfo info;
-        try
-        {
-            info = await _deviceQueryService.GetSrtSetupAsync().ConfigureAwait(true);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "SRT setup lookup failed.");
-            return;
-        }
-
-        _lastSrtSetup = info;
-        SrtSetupText.Text = info.InstructionsText;
-        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
-        SrtHostsList.ItemsSource = info.HostCandidates;
-        SrtLatencyBox.Text = info.RecommendedLatencyMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        SrtAtemText.Text =
-            $"ATEM Mini host: {_config.AtemIp}. Set the ATEM's streaming output to Caller and enter the URL above.";
-    }
-
-    private void OnUseRecommendedSrtUrlClick(object sender, RoutedEventArgs e)
-    {
-        if (_lastSrtSetup is { } setup)
-        {
-            SrtUrlBox.Text = setup.RecommendedUrl;
-        }
-    }
-
-    private void OnBrowseImageClick(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Select an image",
-            Filter = "Images|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tga;*.psd|All files|*.*",
-        };
-
-        if (dialog.ShowDialog(this) == true)
-        {
-            ImagePathBox.Text = dialog.FileName;
-        }
-    }
-
-    private void OnBrowseHtmlClick(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Select an HTML file",
-            Filter = "HTML|*.html;*.htm|All files|*.*",
-        };
-
-        if (dialog.ShowDialog(this) == true)
-        {
-            HtmlUrlBox.Text = dialog.FileName;
-            HtmlLocalFileCheck.IsChecked = true;
-        }
-    }
-
-    private async void OnAddSourceClick(object sender, RoutedEventArgs e)
-    {
-        var name = NewSourceNameBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            System.Windows.MessageBox.Show("Give the source a name first.", "Add source", MessageBoxButton.OK, MessageBoxImage.Information);
-            NewSourceNameBox.Focus();
-            return;
-        }
-
-        var type = SelectedSourceTypeText();
-        var id = GenerateId(name);
-        SourceDefinition? definition = type switch
-        {
-            "WEBCAM" => DeviceCombo.SelectedItem is DeviceInfo webcam
-                ? new SourceDefinition(id, name, SourceType.Webcam, null, new WebcamConfig(webcam.Id, SelectedWebcamFormat()), null)
-                : null,
-            "NDI" => DeviceCombo.SelectedItem is DeviceInfo ndi
-                ? new SourceDefinition(id, name, SourceType.Ndi, new NdiConfig(ndi.Id), null, null)
-                : null,
-            "SRT" => BuildSrtDefinition(id, name),
-            "IMAGE" => BuildImageDefinition(id, name),
-            "HTML" => BuildHtmlDefinition(id, name),
-            _ => null,
-        };
-
-        if (definition is null)
-        {
-            System.Windows.MessageBox.Show(
-                "Fill in step 3 first: pick a device, or enter an SRT URL / image file / web address.",
-                "Add source", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        try
-        {
-            await _orchestrator.AddSourceAsync(definition).ConfigureAwait(true);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
-        {
-            // The engine rejects a source it cannot create natively (e.g. an NDI source with DistroAV
-            // absent). Without this catch the exception escapes an async void handler and takes the
-            // whole app down instead of telling the operator what to install.
-            _logger.LogWarning(ex, "Adding source {SourceId} failed.", definition.Id);
-            System.Windows.MessageBox.Show(ex.Message, "Add source", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        RefreshAvailableTokensAndIds();
-        NewSourceNameBox.Clear();
-        ShowAddSourcePanel(false);
-    }
-
-    private string? SelectedWebcamFormat()
-    {
-        var index = WebcamFormatCombo.SelectedIndex;
-        return index >= 0 && index < WebcamCaptureModes.Length ? WebcamCaptureModes[index].Format : null;
-    }
-
-    private SourceDefinition? BuildSrtDefinition(string id, string name)
-    {
-        var url = SrtUrlBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return null;
-        }
-
-        var latency = int.TryParse(SrtLatencyBox.Text, out var parsed) ? parsed : DeviceQueryDefaultLatencyMs;
-        return new SourceDefinition(id, name, SourceType.Srt, null, null, new SrtConfig(url, latency));
-    }
-
-    private SourceDefinition? BuildImageDefinition(string id, string name)
-    {
-        var path = ImagePathBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        if (!System.IO.File.Exists(path))
-        {
-            System.Windows.MessageBox.Show($"No file at \"{path}\".", "Add source", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return null;
-        }
-
-        return new SourceDefinition(id, name, SourceType.Image, null, null, null, new ImageConfig(path), null);
-    }
-
-    private SourceDefinition? BuildHtmlDefinition(string id, string name)
-    {
-        var url = HtmlUrlBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return null;
-        }
-
-        var isLocalFile = HtmlLocalFileCheck.IsChecked == true;
-        if (isLocalFile && !System.IO.File.Exists(url))
-        {
-            System.Windows.MessageBox.Show($"No file at \"{url}\".", "Add source", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return null;
-        }
-
-        var width = int.TryParse(HtmlWidthBox.Text, out var w) && w > 0 ? w : EngineDefaults.CanvasWidth;
-        var height = int.TryParse(HtmlHeightBox.Text, out var h) && h > 0 ? h : EngineDefaults.CanvasHeight;
-        var fps = int.TryParse(HtmlFpsBox.Text, out var f) && f > 0 ? f : 30;
-
-        return new SourceDefinition(
-            id, name, SourceType.Html, null, null, null, null,
-            new HtmlConfig(url, width, height, isLocalFile, fps, Css: null));
-    }
-
-    private string SelectedSourceTypeText() =>
-        (NewSourceTypeCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "WEBCAM";
-
-    private DeviceQueryType? SelectedDeviceQueryType() => SelectedSourceTypeText() switch
-    {
-        "WEBCAM" => DeviceQueryType.Webcam,
-        "NDI" => DeviceQueryType.Ndi,
-        _ => null,
-    };
-
-    private static string GenerateId(string name)
-    {
-        var slug = new string([.. name.Where(char.IsLetterOrDigit)]).ToLowerInvariant();
-        if (slug.Length == 0)
-        {
-            slug = "src";
-        }
-        else if (slug.Length > 16)
-        {
-            slug = slug[..16];
-        }
-
-        return $"{slug}-{Guid.NewGuid():N}"[..(slug.Length + 9)];
     }
 
     private async void OnRemoveSourceClick(object sender, RoutedEventArgs e)
@@ -1129,7 +942,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var id = mixId ?? GenerateId(editor.MixName);
+            var id = mixId ?? AddSourceWindow.GenerateId(editor.MixName);
             var definition = new SourceDefinition(
                 id, editor.MixName, SourceType.Mix, null, null, null, null, null, mix);
 

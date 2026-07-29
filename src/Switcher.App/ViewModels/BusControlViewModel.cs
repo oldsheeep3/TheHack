@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Switcher.App.Rendering;
 using Switcher.Contracts;
+using Brush = System.Windows.Media.Brush;
 
 namespace Switcher.App.ViewModels;
 
@@ -12,13 +14,16 @@ namespace Switcher.App.ViewModels;
 /// </summary>
 public sealed class BusSourceViewModel : INotifyPropertyChanged
 {
+    private readonly ProgramBus _bus;
     private bool _staged;
     private bool _onProgram;
 
-    public BusSourceViewModel(string id, string name)
+    public BusSourceViewModel(string id, string name, ProgramBus bus)
     {
         Id = id;
         Name = name;
+        _bus = bus;
+        TallyPalette.Changed += OnPaletteChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -26,6 +31,12 @@ public sealed class BusSourceViewModel : INotifyPropertyChanged
     public string Id { get; }
 
     public string Name { get; }
+
+    /// <summary>On-air brush tinted with this bus's own PGM colour, so ME2's live buttons carry the
+    /// operator's ME2 palette rather than ME1's.</summary>
+    public Brush OnProgramBrush => TallyPalette.ProgramBrush(_bus);
+
+    private void OnPaletteChanged() => OnPropertyChanged(nameof(OnProgramBrush));
 
     /// <summary>Whether this source is part of the bus's staged (PVW) composition.</summary>
     public bool Staged
@@ -79,6 +90,7 @@ public sealed class BusControlViewModel : INotifyPropertyChanged
         Bus = bus;
         ProgramLabel = bus == ProgramBus.Pgm2 ? "PGM2" : "PGM1";
         PreviewLabel = bus == ProgramBus.Pgm2 ? "PVW2" : "PVW1";
+        TallyPalette.Changed += OnPaletteChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -88,6 +100,18 @@ public sealed class BusControlViewModel : INotifyPropertyChanged
     public string ProgramLabel { get; }
 
     public string PreviewLabel { get; }
+
+    /// <summary>PGM / PVW brushes for this bus. Recomputed whenever the operator edits the palette so
+    /// ME2's dock labels track its own colours rather than inheriting ME1's red/green.</summary>
+    public Brush ProgramBrush => TallyPalette.ProgramBrush(Bus);
+
+    public Brush PreviewBrush => TallyPalette.PreviewBrush(Bus);
+
+    private void OnPaletteChanged()
+    {
+        OnPropertyChanged(nameof(ProgramBrush));
+        OnPropertyChanged(nameof(PreviewBrush));
+    }
 
     public ObservableCollection<BusSourceViewModel> Sources { get; } = [];
 
@@ -137,7 +161,7 @@ public sealed class BusControlViewModel : INotifyPropertyChanged
         Sources.Clear();
         foreach (var (id, name) in sources)
         {
-            Sources.Add(new BusSourceViewModel(id, name)
+            Sources.Add(new BusSourceViewModel(id, name, Bus)
             {
                 Staged = stagedBefore.Contains(id),
                 OnProgram = onProgramBefore.Contains(id),

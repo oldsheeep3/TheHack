@@ -29,6 +29,10 @@ public static class TallyPalette
 
     public const string PreviewKey = "TallyPreview";
 
+    /// <summary>Raised after <see cref="Apply"/> replaces the palette, so bus-scoped view models can
+    /// re-notify their computed brush properties (WPF Bindings do not observe direct dictionary writes).</summary>
+    public static event Action? Changed;
+
     /// <summary>Writes <paramref name="colors"/> into the application resources. Call on the UI thread.</summary>
     public static void Apply(TallyColors colors)
     {
@@ -47,6 +51,8 @@ public static class TallyPalette
         resources[IdleKey] = Freeze(colors.Idle);
         resources[ProgramKey] = Freeze(colors.Pgm1);
         resources[PreviewKey] = Freeze(colors.Pvw1);
+
+        Changed?.Invoke();
     }
 
     /// <summary>The brush for a bus's program state, for code that builds brushes itself.</summary>

@@ -23,7 +23,7 @@
         <!-- ═══ menu ═══════════════════════════════════════════════════════════ -->
         <Menu Grid.Row="0">
             <MenuItem Header="_Sources">
-                <MenuItem Header="Rescan devices" Click="OnRescanDevicesClick" />
+                <MenuItem Header="Add source..." Click="OnOpenAddSourceClick" />
                 <Separator />
                 <MenuItem Header="Reconnect all disconnected" Click="OnReconnectAllClick" />
             </MenuItem>
@@ -40,6 +40,16 @@
                 <Separator />
                 <MenuItem Header="Tally colours..." Click="OnTallyColorsClick" />
             </MenuItem>
+            <!-- Operator preferences: choices about the console layout that persist across restarts. -->
+            <MenuItem Header="_Preferences">
+                <MenuItem Header="Stage view" IsEnabled="False" />
+                <MenuItem x:Name="StageViewBothItem" Header="Show ME1 + ME2 (both)" IsCheckable="True"
+                          Click="OnStageViewChanged" Tag="Both" />
+                <MenuItem x:Name="StageViewMe1Item" Header="Show ME1 only" IsCheckable="True"
+                          Click="OnStageViewChanged" Tag="Me1Only" />
+                <MenuItem x:Name="StageViewMe2Item" Header="Show ME2 only" IsCheckable="True"
+                          Click="OnStageViewChanged" Tag="Me2Only" />
+            </MenuItem>
         </Menu>
 
         <!-- ═══ toolbar: the handful of verbs used during a show ═══════════════ -->
@@ -47,22 +57,23 @@
                 BorderThickness="0,0,0,1" Padding="10,7">
             <DockPanel>
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-                    <Button Content="+ Add source" Click="OnFocusAddSourceClick" Style="{StaticResource ToolButtonAccent}" />
+                    <Button Content="+ Add source" Click="OnOpenAddSourceClick" Style="{StaticResource ToolButtonAccent}" />
                     <Button Content="New mix..." Click="OnNewMixClick" ToolTip="Combine several sources into one" />
                     <Button Content="Multiview settings" Click="OnOpenMultiviewSettingsClick" />
                     <Button Content="Multiview full-screen" Click="OnMultiviewFullscreenClick" />
                     <Button Content="Open projector" Click="OnOpenProjectorClick" />
                 </StackPanel>
 
-                <!-- Live state, right-aligned: tally first, then the things that can be wrong. -->
+                <!-- Live state, right-aligned: tally first, then the things that can be wrong. Each chip
+                     uses its own bus's palette so ME2's custom colours are visible next to ME1's. -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Border Style="{StaticResource Chip}" Background="{StaticResource TallyProgram}" Margin="0,0,6,0">
+                    <Border Style="{StaticResource Chip}" Background="{DynamicResource TallyPgm1}" Margin="0,0,6,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="PGM1" Style="{StaticResource ChipText}" Foreground="White" Margin="0,0,6,0" />
                             <TextBlock x:Name="ActivePgm1Text" Text="-" Style="{StaticResource ChipText}" Foreground="White" />
                         </StackPanel>
                     </Border>
-                    <Border Style="{StaticResource Chip}" Background="{StaticResource TallyProgram}" Margin="0,0,12,0">
+                    <Border Style="{StaticResource Chip}" Background="{DynamicResource TallyPgm2}" Margin="0,0,12,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="PGM2" Style="{StaticResource ChipText}" Foreground="White" Margin="0,0,6,0" />
                             <TextBlock x:Name="ActivePgm2Text" Text="-" Style="{StaticResource ChipText}" Foreground="White" />
@@ -70,13 +81,13 @@
                     </Border>
                     <Border Style="{StaticResource Chip}" Margin="0,0,6,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="PVW1" Style="{StaticResource ChipText}" Foreground="{StaticResource TallyPreview}" Margin="0,0,6,0" />
+                            <TextBlock Text="PVW1" Style="{StaticResource ChipText}" Foreground="{DynamicResource TallyPvw1}" Margin="0,0,6,0" />
                             <TextBlock x:Name="ActivePvw1Text" Text="-" Style="{StaticResource ChipText}" />
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Chip}" Margin="0,0,16,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="PVW2" Style="{StaticResource ChipText}" Foreground="{StaticResource TallyPreview}" Margin="0,0,6,0" />
+                            <TextBlock Text="PVW2" Style="{StaticResource ChipText}" Foreground="{DynamicResource TallyPvw2}" Margin="0,0,6,0" />
                             <TextBlock x:Name="ActivePvw2Text" Text="-" Style="{StaticResource ChipText}" />
                         </StackPanel>
                     </Border>
@@ -90,7 +101,7 @@
             </DockPanel>
         </Border>
 
-        <!-- ═══ stage: preview | program, transition bar under them ═══════════ -->
+        <!-- ═══ stage: both ME rows visible, splittable ═══════════════════════ -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -98,12 +109,13 @@
             </Grid.ColumnDefinitions>
 
             <DockPanel Grid.Column="0" Margin="10,10,5,6">
-                <!-- Which M/E the big monitors follow. Both buses stay operable in the Buses dock below. -->
+                <!-- Header: the focused ME still drives the transition bar / keyboard shortcuts even
+                     though both ME rows are visible. -->
                 <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}" CornerRadius="5,5,0,0"
                         BorderThickness="1,1,1,1">
                     <DockPanel>
                         <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-                            <TextBlock Text="Mix / Effect" Style="{StaticResource DockTitle}" Margin="0,0,10,0" />
+                            <TextBlock Text="Focused M/E" Style="{StaticResource DockTitle}" Margin="0,0,10,0" />
                             <RadioButton x:Name="Me1Radio" Content="ME 1" GroupName="Me" IsChecked="True"
                                          Checked="OnStageBusChanged" Foreground="{StaticResource Text}"
                                          VerticalAlignment="Center" Margin="0,0,10,0" />
@@ -116,7 +128,8 @@
                     </DockPanel>
                 </Border>
 
-                <!-- Transition bar sits between the monitors and the docks, where the hand already is. -->
+                <!-- Transition bar (bottom, spans both ME rows): acts on whichever ME the radio above
+                     has focused. -->
                 <Border DockPanel.Dock="Bottom" Style="{StaticResource DockShell}" CornerRadius="0,0,5,5"
                         Padding="10,8" BorderThickness="1,0,1,1">
                     <DockPanel>
@@ -139,34 +152,87 @@
                     </DockPanel>
                 </Border>
 
-                <!-- Preview left, program right: the OBS Studio Mode reading order. -->
+                <!-- Both ME rows are visible at once; the operator drags the splitters to give whichever
+                     ME they are watching more room. Each row's preview/program borders use their own bus's
+                     palette (DynamicResource) so ME2's custom colours are honoured. The named rows are
+                     resized from code-behind to hide one ME when the Preferences menu asks for it. -->
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition x:Name="StageMe1Row" Height="*" MinHeight="0" />
+                        <RowDefinition x:Name="StageSplitterRow" Height="6" />
+                        <RowDefinition x:Name="StageMe2Row" Height="*" MinHeight="0" />
+                    </Grid.RowDefinitions>
 
-                    <Border Grid.Column="0" Margin="0,0,5,0" Background="{StaticResource Canvas}"
-                            BorderBrush="{StaticResource TallyPreview}" BorderThickness="3">
-                        <Grid>
-                            <Image x:Name="PreviewImage" Stretch="Uniform" />
-                            <Border VerticalAlignment="Bottom" Background="{StaticResource TallyPreview}" Padding="8,3">
-                                <TextBlock x:Name="PreviewCaption" Text="PREVIEW — nothing staged"
-                                           Foreground="#FF04150C" FontSize="11" FontWeight="SemiBold" />
-                            </Border>
-                        </Grid>
-                    </Border>
+                    <!-- ME 1 row -->
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="120" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="*" MinWidth="120" />
+                        </Grid.ColumnDefinitions>
 
-                    <Border Grid.Column="1" Margin="5,0,0,0" Background="{StaticResource Canvas}"
-                            BorderBrush="{StaticResource TallyProgram}" BorderThickness="3">
-                        <Grid>
-                            <Image x:Name="ProgramImage" Stretch="Uniform" />
-                            <Border VerticalAlignment="Bottom" Background="{StaticResource TallyProgram}" Padding="8,3">
-                                <TextBlock x:Name="ProgramCaption" Text="PROGRAM — off air"
-                                           Foreground="White" FontSize="11" FontWeight="SemiBold" />
-                            </Border>
-                        </Grid>
-                    </Border>
+                        <Border Grid.Column="0" Background="{StaticResource Canvas}"
+                                BorderBrush="{DynamicResource TallyPvw1}" BorderThickness="3">
+                            <Grid>
+                                <Image x:Name="Preview1Image" Stretch="Uniform" />
+                                <Border VerticalAlignment="Bottom" Background="{DynamicResource TallyPvw1}" Padding="8,3">
+                                    <TextBlock x:Name="Preview1Caption" Text="PVW1 — nothing staged"
+                                               Foreground="#FF04150C" FontSize="11" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                      Background="{StaticResource Line}" ShowsPreview="False" />
+
+                        <Border Grid.Column="2" Background="{StaticResource Canvas}"
+                                BorderBrush="{DynamicResource TallyPgm1}" BorderThickness="3">
+                            <Grid>
+                                <Image x:Name="Program1Image" Stretch="Uniform" />
+                                <Border VerticalAlignment="Bottom" Background="{DynamicResource TallyPgm1}" Padding="8,3">
+                                    <TextBlock x:Name="Program1Caption" Text="PGM1 — off air"
+                                               Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                  Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Rows" />
+
+                    <!-- ME 2 row -->
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="120" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="*" MinWidth="120" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Background="{StaticResource Canvas}"
+                                BorderBrush="{DynamicResource TallyPvw2}" BorderThickness="3">
+                            <Grid>
+                                <Image x:Name="Preview2Image" Stretch="Uniform" />
+                                <Border VerticalAlignment="Bottom" Background="{DynamicResource TallyPvw2}" Padding="8,3">
+                                    <TextBlock x:Name="Preview2Caption" Text="PVW2 — nothing staged"
+                                               Foreground="#FF04150C" FontSize="11" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                      Background="{StaticResource Line}" ShowsPreview="False" />
+
+                        <Border Grid.Column="2" Background="{StaticResource Canvas}"
+                                BorderBrush="{DynamicResource TallyPgm2}" BorderThickness="3">
+                            <Grid>
+                                <Image x:Name="Program2Image" Stretch="Uniform" />
+                                <Border VerticalAlignment="Bottom" Background="{DynamicResource TallyPgm2}" Padding="8,3">
+                                    <TextBlock x:Name="Program2Caption" Text="PGM2 — off air"
+                                               Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </Grid>
                 </Grid>
             </DockPanel>
 
@@ -184,9 +250,9 @@
                         <StackPanel>
                             <Button Content="Edit layout..." Click="OnOpenMultiviewSettingsClick" HorizontalAlignment="Stretch" />
                             <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
-                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{StaticResource TallyProgram}" Margin="0,0,5,0" />
+                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{DynamicResource TallyProgram}" Margin="0,0,5,0" />
                                 <TextBlock Text="on air" Style="{StaticResource MicroLabel}" Margin="0,0,12,0" />
-                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{StaticResource TallyPreview}" Margin="0,0,5,0" />
+                                <Border Width="20" Height="13" BorderThickness="3" BorderBrush="{DynamicResource TallyPreview}" Margin="0,0,5,0" />
                                 <TextBlock Text="staged" Style="{StaticResource MicroLabel}" />
                             </StackPanel>
                         </StackPanel>
@@ -238,152 +304,67 @@
                             <TextBlock Text="Sources" Style="{StaticResource DockTitle}" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <TextBlock x:Name="SourceCountText" Style="{StaticResource MicroLabel}" Text="0" Margin="0,0,8,0" />
-                                <!-- The add form is a panel over this dock rather than a permanent
-                                     column: it is only needed while setting up, and it wants the full
-                                     width when it is. -->
-                                <Button x:Name="AddSourceToggle" Content="+" Click="OnToggleAddSourceClick"
+                                <!-- The add form is a modal window since v3: an overlay panel in this dock
+                                     was covering the source list while open. -->
+                                <Button x:Name="AddSourceToggle" Content="+" Click="OnOpenAddSourceClick"
                                         Style="{StaticResource ToolButtonAccent}" Padding="9,0" Margin="0"
                                         FontSize="14" FontWeight="Bold" ToolTip="Add a source" />
                             </StackPanel>
                         </DockPanel>
                     </Border>
-                    <Grid>
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6">
-                            <StackPanel>
-                                <ItemsControl x:Name="SourceTilesControl">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <!-- Status stripe on the left edge: green connected, red error,
-                                                 grey idle - readable before any of the text is. -->
-                                            <Border Style="{StaticResource ListRow}" BorderThickness="3,0,0,0"
-                                                    BorderBrush="{Binding StatusBrush}">
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap">
-                                                        <Run Text="{Binding Channel, StringFormat='ch{0}', Mode=OneWay}" />
-                                                        <Run Text=" · " />
-                                                        <Run Text="{Binding Protocol, Mode=OneWay}" />
-                                                        <Run Text=" · " />
-                                                        <Run Text="{Binding StatusText, Mode=OneWay}" />
-                                                    </TextBlock>
-                                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                                        <TextBlock Text="AUDIO" Style="{StaticResource MicroLabel}" Margin="0,0,5,0" />
-                                                        <ComboBox ItemsSource="{Binding AudioModes}"
-                                                                  SelectedItem="{Binding AudioMode, Mode=TwoWay}"
-                                                                  SelectionChanged="OnSourceAudioModeChanged" Tag="{Binding Id}"
-                                                                  Width="66" FontSize="11"
-                                                                  ToolTip="AFV: heard while this source is on air · ON: always heard · OFF: never heard">
-                                                            <ComboBox.ItemTemplate>
-                                                                <DataTemplate>
-                                                                    <TextBlock Text="{Binding Converter={StaticResource AudioModeLabel}}" />
-                                                                </DataTemplate>
-                                                            </ComboBox.ItemTemplate>
-                                                        </ComboBox>
-                                                    </StackPanel>
-                                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                                        <Button Content="Edit mix" Click="OnEditMixClick" Tag="{Binding Id}"
-                                                                Padding="8,2" FontSize="11"
-                                                                Visibility="{Binding IsMix, Converter={StaticResource BoolToVisibility}}" />
-                                                        <Button Content="Reconnect" Click="OnReconnectSourceClick" Tag="{Binding Id}"
-                                                                Padding="8,2" FontSize="11"
-                                                                Visibility="{Binding IsReconnectable, Converter={StaticResource BoolToVisibility}}" />
-                                                        <Button Content="Remove" Click="OnRemoveSourceClick" Tag="{Binding Id}"
-                                                                Padding="8,2" FontSize="11" Margin="0" />
-                                                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6">
+                        <StackPanel>
+                            <ItemsControl x:Name="SourceTilesControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <!-- Status stripe on the left edge: green connected, red error,
+                                             grey idle - readable before any of the text is. -->
+                                        <Border Style="{StaticResource ListRow}" BorderThickness="3,0,0,0"
+                                                BorderBrush="{Binding StatusBrush}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap">
+                                                    <Run Text="{Binding Channel, StringFormat='ch{0}', Mode=OneWay}" />
+                                                    <Run Text=" · " />
+                                                    <Run Text="{Binding Protocol, Mode=OneWay}" />
+                                                    <Run Text=" · " />
+                                                    <Run Text="{Binding StatusText, Mode=OneWay}" />
+                                                </TextBlock>
+                                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                    <TextBlock Text="AUDIO" Style="{StaticResource MicroLabel}" Margin="0,0,5,0" />
+                                                    <ComboBox ItemsSource="{Binding AudioModes}"
+                                                              SelectedItem="{Binding AudioMode, Mode=TwoWay}"
+                                                              SelectionChanged="OnSourceAudioModeChanged" Tag="{Binding Id}"
+                                                              Width="66" FontSize="11"
+                                                              ToolTip="AFV: heard while this source is on air · ON: always heard · OFF: never heard">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Converter={StaticResource AudioModeLabel}}" />
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
                                                 </StackPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <TextBlock Text="No sources yet. Press + above to add your first camera."
-                                           Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="2,6,2,0"
-                                           Visibility="{Binding ElementName=SourceTilesControl, Path=Items.Count, Converter={StaticResource ZeroToVisibility}}" />
-                            </StackPanel>
-                        </ScrollViewer>
-
-                        <!-- 3-step add form, opened from the + button and covering the list while open. -->
-                        <Border x:Name="AddSourcePanel" Visibility="Collapsed"
-                                Background="{StaticResource SurfaceSunken}" BorderBrush="{StaticResource LineStrong}"
-                                BorderThickness="1">
-                            <DockPanel>
-                                <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
-                                    <DockPanel>
-                                        <TextBlock Text="Add source" Style="{StaticResource DockTitle}" />
-                                        <Button Content="✕" Click="OnCloseAddSourceClick" HorizontalAlignment="Right"
-                                                Padding="7,1" Margin="0" ToolTip="Close without adding" />
-                                    </DockPanel>
-                                </Border>
-                                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
-                                <StackPanel>
-
-                                    <TextBlock Text="1. Name it" Style="{StaticResource MonoText}" />
-                                    <TextBox x:Name="NewSourceNameBox" ToolTip="A name you will recognise on the bus buttons" />
-
-                                    <TextBlock Text="2. What kind?" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                    <ComboBox x:Name="NewSourceTypeCombo" SelectionChanged="OnSourceTypeChanged">
-                                        <ComboBoxItem Content="WEBCAM" />
-                                        <ComboBoxItem Content="NDI" />
-                                        <ComboBoxItem Content="SRT" />
-                                        <ComboBoxItem Content="IMAGE" />
-                                        <ComboBoxItem Content="HTML" />
-                                    </ComboBox>
-
-                                    <StackPanel x:Name="DeviceSelectPanel">
-                                        <TextBlock Text="3. Which device?" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                        <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name" />
-                                        <TextBlock x:Name="NoDevicesText" Style="{StaticResource MonoText}"
-                                                   TextWrapping="Wrap" Visibility="Collapsed" />
-                                        <StackPanel x:Name="WebcamFormatPanel">
-                                            <TextBlock Text="Capture mode" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                            <ComboBox x:Name="WebcamFormatCombo" SelectedIndex="0" />
-                                        </StackPanel>
-                                        <Button Content="Rescan" Click="OnRescanDevicesClick" Margin="0,4,0,0" HorizontalAlignment="Stretch" />
-                                    </StackPanel>
-
-                                    <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
-                                        <TextBlock Text="3. SRT connection" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                        <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
-                                            <ComboBoxItem Content="Listener" />
-                                            <ComboBoxItem Content="Caller" />
-                                        </ComboBox>
-                                        <TextBox x:Name="SrtUrlBox" ToolTip="srt://host:port" />
-                                        <TextBlock Text="Latency (ms)" Style="{StaticResource MonoText}" />
-                                        <TextBox x:Name="SrtLatencyBox" Text="40" />
-                                        <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,4,0,0" />
-                                        <TextBlock x:Name="SrtSetupText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                        <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
-                                        <ListBox x:Name="SrtHostsList" MaxHeight="60" Background="{StaticResource Canvas}"
-                                                 Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}" />
-                                        <TextBlock x:Name="SrtAtemText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                    </StackPanel>
-
-                                    <StackPanel x:Name="ImagePanel" Visibility="Collapsed">
-                                        <TextBlock Text="3. Image file" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                        <TextBox x:Name="ImagePathBox" ToolTip="png / jpg / gif / webp / bmp" />
-                                        <Button Content="Browse..." Click="OnBrowseImageClick" Margin="0,4,0,0" />
-                                    </StackPanel>
-
-                                    <StackPanel x:Name="HtmlPanel" Visibility="Collapsed">
-                                        <TextBlock Text="3. Web address or .html" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                        <TextBox x:Name="HtmlUrlBox" ToolTip="https://... or a local .html path" />
-                                        <CheckBox x:Name="HtmlLocalFileCheck" Content="Local file" />
-                                        <Button Content="Browse..." Click="OnBrowseHtmlClick" Margin="0,2,0,0" />
-                                        <TextBlock Text="Page size" Style="{StaticResource MonoText}" Margin="0,4,0,0" />
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBox x:Name="HtmlWidthBox" Text="1920" Width="54" Margin="0,0,4,0" />
-                                            <TextBox x:Name="HtmlHeightBox" Text="1080" Width="54" Margin="0,0,4,0" />
-                                            <TextBox x:Name="HtmlFpsBox" Text="30" Width="38" ToolTip="Frames per second" />
-                                        </StackPanel>
-                                    </StackPanel>
-
-                                    <Button Content="Add source" Click="OnAddSourceClick" Margin="0,8,0,0"
-                                            Style="{StaticResource ToolButtonAccent}" HorizontalAlignment="Stretch" />
-                                </StackPanel>
-                                </ScrollViewer>
-                            </DockPanel>
-                        </Border>
-                    </Grid>
+                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                    <Button Content="Edit mix" Click="OnEditMixClick" Tag="{Binding Id}"
+                                                            Padding="8,2" FontSize="11"
+                                                            Visibility="{Binding IsMix, Converter={StaticResource BoolToVisibility}}" />
+                                                    <Button Content="Reconnect" Click="OnReconnectSourceClick" Tag="{Binding Id}"
+                                                            Padding="8,2" FontSize="11"
+                                                            Visibility="{Binding IsReconnectable, Converter={StaticResource BoolToVisibility}}" />
+                                                    <Button Content="Remove" Click="OnRemoveSourceClick" Tag="{Binding Id}"
+                                                            Padding="8,2" FontSize="11" Margin="0" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="No sources yet. Press + above to add your first camera."
+                                       Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="2,6,2,0"
+                                       Visibility="{Binding ElementName=SourceTilesControl, Path=Items.Count, Converter={StaticResource ZeroToVisibility}}" />
+                        </StackPanel>
+                    </ScrollViewer>
                 </DockPanel>
             </Border>
 
@@ -409,13 +390,13 @@
                                         <StackPanel DockPanel.Dock="Left" Width="112" Margin="0,0,10,0">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="{Binding ProgramLabel}" FontSize="11" FontWeight="Bold"
-                                                           Foreground="{StaticResource TallyProgram}" Margin="0,0,5,0" />
+                                                           Foreground="{Binding ProgramBrush}" Margin="0,0,5,0" />
                                                 <TextBlock Text="{Binding ProgramText}" Style="{StaticResource MonoText}"
                                                            TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="{Binding PreviewLabel}" FontSize="11" FontWeight="Bold"
-                                                           Foreground="{StaticResource TallyPreview}" Margin="0,0,5,0" />
+                                                           Foreground="{Binding PreviewBrush}" Margin="0,0,5,0" />
                                                 <TextBlock Text="{Binding PreviewText}" Style="{StaticResource MonoText}"
                                                            TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
@@ -451,13 +432,14 @@
                                                                                 <Setter TargetName="bd" Property="Background" Value="{StaticResource ControlHover}" />
                                                                             </Trigger>
                                                                             <!-- Staged (green) is the operator's own choice; on-air (red) is a
-                                                                                 fact about the signal, so it outranks it on the same button. -->
+                                                                                 fact about the signal, so it outranks it on the same button.
+                                                                                 OnProgramBrush is per-bus, so ME2 shows its own PGM colour. -->
                                                                             <Trigger Property="IsChecked" Value="True">
                                                                                 <Setter TargetName="bd" Property="Background" Value="#FF16452C" />
-                                                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TallyPreview}" />
+                                                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource TallyPreview}" />
                                                                             </Trigger>
                                                                             <DataTrigger Binding="{Binding OnProgram}" Value="True">
-                                                                                <Setter TargetName="bd" Property="Background" Value="{StaticResource TallyProgram}" />
+                                                                                <Setter TargetName="bd" Property="Background" Value="{Binding OnProgramBrush}" />
                                                                                 <Setter TargetName="bd" Property="BorderBrush" Value="#FFFF6B66" />
                                                                                 <Setter Property="Foreground" Value="White" />
                                                                             </DataTrigger>
@@ -490,66 +472,76 @@
                             <TextBlock HorizontalAlignment="Right" Style="{StaticResource MicroLabel}" Text="WHERE VIDEO GOES" />
                         </DockPanel>
                     </Border>
-                    <Border DockPanel.Dock="Bottom" Padding="6">
+                    <!-- Both sections were stacked in fixed space and the taller one was hiding the other.
+                         Wrap each in an Expander so the operator can collapse whichever they aren't using;
+                         Audio starts collapsed because most shows don't touch it once it is set. -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6">
                         <StackPanel>
-                            <Button Content="Apply output routing" Click="OnApplyOutputsClick" HorizontalAlignment="Stretch" />
+                            <Expander Header="Output routing" IsExpanded="True" Foreground="{StaticResource Text}"
+                                      Margin="0,0,0,4">
+                                <StackPanel Margin="4,4,0,0">
+                                    <ItemsControl x:Name="OutputsControl">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Style="{StaticResource ListRow}">
+                                                    <StackPanel>
+                                                        <DockPanel>
+                                                            <TextBlock Text="{Binding Sink}" FontWeight="SemiBold" FontSize="12" />
+                                                            <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}"
+                                                                      Width="86" HorizontalAlignment="Right" />
+                                                        </DockPanel>
+                                                        <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
+                                                            <ComboBox ItemsSource="{Binding AvailableDisplays}" DisplayMemberPath="Label"
+                                                                      SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}" />
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <CheckBox Content="Hide cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,3,10,3" />
+                                                                <CheckBox Content="Full-screen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
+                                                            <TextBox Text="{Binding NdiName, Mode=TwoWay}" ToolTip="NDI name seen by receivers" />
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Button Content="Apply output routing" Click="OnApplyOutputsClick"
+                                            HorizontalAlignment="Stretch" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Expander>
 
-                            <!-- Audio is routed per bus, and a bus may drive more than one device -
-                                 libobs monitors to a single device, so this is our own render path. -->
-                            <TextBlock Text="AUDIO OUT" Style="{StaticResource MicroLabel}" Margin="0,10,0,3" />
-                            <ItemsControl x:Name="AudioOutputsControl">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <DockPanel Margin="0,0,0,3">
-                                            <TextBlock Text="{Binding Label}" Width="38" FontSize="11" FontWeight="SemiBold"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{Binding BusBrush}" />
-                                            <Button DockPanel.Dock="Right" Content="×" Click="OnRemoveAudioRowClick"
-                                                    Tag="{Binding}" Padding="7,0" Margin="3,0,0,0" FontSize="11"
-                                                    ToolTip="この出力を外す" />
-                                            <ComboBox ItemsSource="{Binding Devices}" DisplayMemberPath="Name"
-                                                      SelectedItem="{Binding SelectedDevice, Mode=TwoWay}" FontSize="11" />
-                                        </DockPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                <Button Content="+ PGM1" Click="OnAddAudioRowClick" Tag="Pgm1" Padding="8,2" FontSize="11" />
-                                <Button Content="+ PGM2" Click="OnAddAudioRowClick" Tag="Pgm2" Padding="8,2" FontSize="11" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                <Button Content="Apply audio" Click="OnApplyAudioClick" />
-                                <Button Content="Rescan" Click="OnRescanAudioClick" Margin="0" />
-                            </StackPanel>
+                            <Expander Header="Audio out" IsExpanded="False" Foreground="{StaticResource Text}">
+                                <StackPanel Margin="4,4,0,0">
+                                    <!-- Audio is routed per bus, and a bus may drive more than one device -
+                                         libobs monitors to a single device, so this is our own render path. -->
+                                    <ItemsControl x:Name="AudioOutputsControl">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <DockPanel Margin="0,0,0,3">
+                                                    <TextBlock Text="{Binding Label}" Width="38" FontSize="11" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{Binding BusBrush}" />
+                                                    <Button DockPanel.Dock="Right" Content="×" Click="OnRemoveAudioRowClick"
+                                                            Tag="{Binding}" Padding="7,0" Margin="3,0,0,0" FontSize="11"
+                                                            ToolTip="この出力を外す" />
+                                                    <ComboBox ItemsSource="{Binding Devices}" DisplayMemberPath="Name"
+                                                              SelectedItem="{Binding SelectedDevice, Mode=TwoWay}" FontSize="11" />
+                                                </DockPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                        <Button Content="+ PGM1" Click="OnAddAudioRowClick" Tag="Pgm1" Padding="8,2" FontSize="11" />
+                                        <Button Content="+ PGM2" Click="OnAddAudioRowClick" Tag="Pgm2" Padding="8,2" FontSize="11" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                        <Button Content="Apply audio" Click="OnApplyAudioClick" />
+                                        <Button Content="Rescan" Click="OnRescanAudioClick" Margin="0" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
-                    </Border>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="6,6,6,0">
-                        <ItemsControl x:Name="OutputsControl">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Style="{StaticResource ListRow}">
-                                        <StackPanel>
-                                            <DockPanel>
-                                                <TextBlock Text="{Binding Sink}" FontWeight="SemiBold" FontSize="12" />
-                                                <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}"
-                                                          Width="86" HorizontalAlignment="Right" />
-                                            </DockPanel>
-                                            <StackPanel Visibility="{Binding IsHdmi, Converter={StaticResource BoolToVisibility}}">
-                                                <ComboBox ItemsSource="{Binding AvailableDisplays}" DisplayMemberPath="Label"
-                                                          SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}" />
-                                                <StackPanel Orientation="Horizontal">
-                                                    <CheckBox Content="Hide cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,3,10,3" />
-                                                    <CheckBox Content="Full-screen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" />
-                                                </StackPanel>
-                                            </StackPanel>
-                                            <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
-                                                <TextBox Text="{Binding NdiName, Mode=TwoWay}" ToolTip="NDI name seen by receivers" />
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                     </ScrollViewer>
                 </DockPanel>
             </Border>

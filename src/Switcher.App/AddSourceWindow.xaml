@@ -1,0 +1,86 @@
+<Window x:Class="Switcher.App.AddSourceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add source" Height="560" Width="440"
+        Background="{DynamicResource Surface}" Foreground="{DynamicResource Text}"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        MinHeight="420" MinWidth="360">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+            <TextBlock Text="Add source" Style="{StaticResource DockTitle}" />
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceRaised}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="12,10">
+            <DockPanel>
+                <Button Content="Cancel" Click="OnCancelClick" HorizontalAlignment="Left" MinWidth="90" />
+                <Button Content="Add source" Click="OnAddClick" Style="{StaticResource ToolButtonAccent}"
+                        HorizontalAlignment="Right" MinWidth="120" Margin="0" />
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
+            <StackPanel>
+                <TextBlock Text="1. Name it" Style="{StaticResource MonoText}" />
+                <TextBox x:Name="NewSourceNameBox" ToolTip="A name you will recognise on the bus buttons" />
+
+                <TextBlock Text="2. What kind?" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                <ComboBox x:Name="NewSourceTypeCombo" SelectionChanged="OnSourceTypeChanged">
+                    <ComboBoxItem Content="WEBCAM" />
+                    <ComboBoxItem Content="NDI" />
+                    <ComboBoxItem Content="SRT" />
+                    <ComboBoxItem Content="IMAGE" />
+                    <ComboBoxItem Content="HTML" />
+                </ComboBox>
+
+                <StackPanel x:Name="DeviceSelectPanel">
+                    <TextBlock Text="3. Which device?" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name" />
+                    <TextBlock x:Name="NoDevicesText" Style="{StaticResource MonoText}"
+                               TextWrapping="Wrap" Visibility="Collapsed" />
+                    <StackPanel x:Name="WebcamFormatPanel">
+                        <TextBlock Text="Capture mode" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                        <ComboBox x:Name="WebcamFormatCombo" SelectedIndex="0" />
+                    </StackPanel>
+                    <Button Content="Rescan" Click="OnRescanDevicesClick" Margin="0,6,0,0" HorizontalAlignment="Stretch" />
+                </StackPanel>
+
+                <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
+                    <TextBlock Text="3. SRT connection" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
+                        <ComboBoxItem Content="Listener" />
+                        <ComboBoxItem Content="Caller" />
+                    </ComboBox>
+                    <TextBox x:Name="SrtUrlBox" ToolTip="srt://host:port" />
+                    <TextBlock Text="Latency (ms)" Style="{StaticResource MonoText}" />
+                    <TextBox x:Name="SrtLatencyBox" Text="40" />
+                    <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,6,0,0" />
+                    <TextBlock x:Name="SrtSetupText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
+                    <ListBox x:Name="SrtHostsList" MaxHeight="60" Background="{DynamicResource Canvas}"
+                             Foreground="{DynamicResource Text}" BorderBrush="{DynamicResource Line}" />
+                    <TextBlock x:Name="SrtAtemText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <StackPanel x:Name="ImagePanel" Visibility="Collapsed">
+                    <TextBlock Text="3. Image file" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <TextBox x:Name="ImagePathBox" ToolTip="png / jpg / gif / webp / bmp" />
+                    <Button Content="Browse..." Click="OnBrowseImageClick" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <StackPanel x:Name="HtmlPanel" Visibility="Collapsed">
+                    <TextBlock Text="3. Web address or .html" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <TextBox x:Name="HtmlUrlBox" ToolTip="https://... or a local .html path" />
+                    <CheckBox x:Name="HtmlLocalFileCheck" Content="Local file" />
+                    <Button Content="Browse..." Click="OnBrowseHtmlClick" Margin="0,4,0,0" />
+                    <TextBlock Text="Page size" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBox x:Name="HtmlWidthBox" Text="1920" Width="60" Margin="0,0,4,0" />
+                        <TextBox x:Name="HtmlHeightBox" Text="1080" Width="60" Margin="0,0,4,0" />
+                        <TextBox x:Name="HtmlFpsBox" Text="30" Width="42" ToolTip="Frames per second" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
