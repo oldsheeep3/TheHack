@@ -202,16 +202,15 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 0. まず CI が走り、**green で終わったときだけ**ミラーが起動する（`workflow_run` トリガー）。
    赤い場合・CI が走らないブランチは、直さない限りミラーされない
 1. [`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が tailnet に ephemeral ノードとして参加し、
-   VPS へ SSH して [`mirror-sync`](tools/mirror/mirror-sync) を実行する
-2. VPS が個人リポジトリから fetch し、[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼ぶ
+   VPS へ SSH して [`mirror-sync X`](tools/mirror/mirror-sync) を実行する（CI が通った `X` だけが対象）
+2. VPS が個人リポジトリから `X` を fetch し、[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼ぶ
 3. [`tools/mirror/filter.sh`](tools/mirror/filter.sh) が `X` の履歴を `.github/` 抜きに書き換える
    （`.github/` しか触っていないコミットは消える）
 4. 書き換え後の tip をミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
 5. `mirror/X` → `X` の PR を作成（既にオープンならそれを使う）し、**マージコミットでマージする**
 
 起点が GitHub 側にあるので、どのマシンから push しても（GitHub 上で直接編集しても）ミラーされる。
-1 回の実行で全ブランチ + 全タグを同期する（ミラーの実行は `concurrency` で常に 1 本に絞られ、
-待機中の実行は後続に追い出されうるため、押されたブランチだけに絞ると取りこぼす）。
+同期するのは CI が通ったそのブランチだけ。全ブランチ + 全タグをまとめて送るのは手動実行のとき。
 
 書き換えは著者・コミッタ・日時・メッセージをそのまま引き継ぐので**決定的**で、同じコミットからは
 必ず同じ SHA が出る。よって 2 回目以降も `mirror/X` へ fast-forward で push できる。ただし
@@ -268,9 +267,11 @@ tailnet の ACL で `tag:ci` から VPS の 22/tcp を許可しておくこと�
 >   していて、排他はしていない）。
 > - `workflow_run` は**デフォルトブランチにあるワークフローファイル**しか起動しない。`mirror.yml`
 >   は `main` にも入っている必要がある（`develop` だけに置いても発火しない）。
-> - CI の push トリガーは `main` / `develop` だけなので、作業ブランチを直接 push しても即座には
->   ミラーされない。次に `main` / `develop` の CI が green になったとき、全ブランチ同期でまとめて
->   拾われる（急ぐなら Actions から手動実行する）。
+> - CI の push トリガーは `main` / `develop` だけなので、作業ブランチを直接 push してもミラーは
+>   起動しない（PR を出せば CI は走るが、`pull_request` 由来の実行はミラーの対象外）。作業ブランチを
+>   今すぐミラーしたいときは VPS で `mirror-sync <branch>` を叩くか、Actions から手動実行する。
+> - ミラーの実行は `concurrency` で 1 本に絞っている。実行中 + 待機中がいる状態でさらに CI が
+>   green になると待機中が追い出され、そのブランチは次の CI green まで待つ。
 > - 除外パスは `MIRROR_EXCLUDE`（トップレベル名を空白区切り、既定 `.github`）で変えられる。
 >   変更したら `filter-map` を消して履歴を作り直すこと。
 > - タグは書き換え後のコミットを指す**軽量タグ**として送る（注釈タグのメッセージは落ちる）。

@@ -14,7 +14,6 @@ on:
   workflow_dispatch:
 
 # VPS 側の作業リポジトリは 1 つなので、ref をまたいで常に 1 本だけ流す。
-# 待機中の実行は後続に追い出されうるため、各実行は全ブランチを同期する。
 concurrency:
   group: mirror
   cancel-in-progress: false
@@ -66,6 +65,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
 
@@ -80,7 +80,21 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
+          # CI が通ったブランチだけを同期する。手動実行のときは引数なし = 全ブランチ + 全タグ。
+          if [ "${GITHUB_EVENT_NAME}" = 'workflow_dispatch' ]; then
+            args=''
+          else
+            # 引数はリモートのシェルが解釈するので、素直な ref 名以外は弾く。
+            case "${BRANCH:-}" in
+              '' | *[!A-Za-z0-9._/-]*)
+                echo "::error::ブランチ名 '${BRANCH:-}' を渡せません。VPS で手動同期してください。"
+                exit 1
+                ;;
+            esac
+            args="${BRANCH}"
+          fi
+
           # mirror-sync は ~/.local/bin にあるのでログインシェルで起動する。
           ssh -i ~/.ssh/mirror_ci \
             -o BatchMode=yes -o ConnectTimeout=30 -o IdentitiesOnly=yes \
-            "${SSH_USER}@${SSH_HOST}" 'bash -lc mirror-sync'
+            "${SSH_USER}@${SSH_HOST}" "bash -lc 'mirror-sync ${args}'"
