@@ -3,10 +3,10 @@
 #
 #   mirror.sh <branch>...
 #
-# 作業用 bare リポジトリの refs/heads/<branch> を filter.sh で .github 抜きの履歴に書き換え、
-# ミラー先の mirror/<branch> へ push し、mirror/<branch> → <branch> の PR を作って
-# マージコミットでマージするところまでやる（人手は要らない）。
+# 作業用 bare リポジトリの refs/heads/<branch> をミラー先の mirror/<branch> へ push し、
+# mirror/<branch> → <branch> の PR を作ってマージコミットでマージするところまでやる。
 # 認証は VPS の gh ログイン（git の credential helper が gh を呼ぶ）。
+# .github/workflows/ を含むので、gh のログインには workflow スコープが要る。
 set -euo pipefail
 
 MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
@@ -21,25 +21,16 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_QUARANTINE_PATH
 log() { printf '[mirror] %s\n' "$*"; }
 git_() { git -C "$REPO_DIR" "$@"; }
 
-# 書き換えは決定的（filter.sh 参照）なので通常は fast-forward で足り、元の履歴が
-# rebase/amend された場合だけ force に落とす（対象は mirror/* のみ）。
-# 戻り値: 0 = push した / 1 = ミラーするものが無い / 2 = 失敗
+# 通常は fast-forward で足り、元の履歴が rebase/amend された場合だけ force に落とす
+# （対象は mirror/* のみ）。
 push_branch() {
-  local branch="$1" dst="refs/heads/${PREFIX}/$1" src
-  if ! src="$("${MIRROR_HOME}/filter.sh" "${branch}")"; then
-    log "error: ${branch} の履歴書き換えに失敗しました"
-    return 2
-  fi
-  if [ -z "${src}" ]; then
-    log "notice: ${branch} は除外パスしか含まないためミラーするものがありません"
-    return 1
-  fi
-  log "${branch} -> ${PREFIX}/${branch} (${src})"
+  local branch="$1" src="refs/heads/$1" dst="refs/heads/${PREFIX}/$1"
+  log "${branch} -> ${PREFIX}/${branch}"
   if git_ push --quiet hackathon "${src}:${dst}" 2>/dev/null; then
     return 0
   fi
   log "warn: ${PREFIX}/${branch} は fast-forward できないため force で上書きします（履歴が書き換わった可能性）"
-  git_ push --quiet --force hackathon "${src}:${dst}" || return 2
+  git_ push --quiet --force hackathon "${src}:${dst}"
 }
 
 # PR を「マージコミット」でマージする。squash / rebase merge だと merge-base が進まず、
@@ -77,12 +68,10 @@ sync_pr() {
     return 0
   fi
 
-  # 履歴を書き換えている都合上、ミラー先の <branch> にフィルタ前の履歴しか無いと共通の祖先が
-  # 無く、PR を作ってもマージできない（compare も 404 になる）。切り替えの初回に一度だけ起きる。
+  # ミラー先の <branch> と共通の祖先が無いと PR を作ってもマージできない（compare も 404）。
   if ! ahead="$(gh api "repos/${TARGET_REPO}/compare/${branch}...${head}" --jq '.ahead_by' 2>/dev/null)"; then
-    log "warn: ${branch}...${head} を比較できません。共通の祖先が無い可能性があります"
-    log "      （.github 除去への切り替え直後など）。その場合はミラー先の ${branch} を"
-    log "      ${head} の内容に合わせ直してください。PR はスキップします。"
+    log "warn: ${branch}...${head} を比較できません。ミラー先の ${branch} を ${head} の内容に"
+    log "      合わせ直してください。PR はスキップします。"
     return 0
   fi
 
@@ -106,7 +95,6 @@ sync_pr() {
         "個人リポジトリ [\`${SOURCE_REPO}\`](https://github.com/${SOURCE_REPO}) の \`${branch}\` を自動ミラーした PR です。" \
         "" \
         "- 生成元: VPS 上の \`tools/mirror/mirror.sh\`。作成後そのままマージコミットでマージされます。" \
-        "- \`.github/\` は同期対象外です。履歴ごと除いてあるので、コミット SHA は個人リポジトリ側と一致しません。" \
         "- この PR の head \`${head}\` はミラー専用ブランチです。直接コミットしないでください（次回の同期で上書きされます）。")")"
     pr="${url##*/}"
     log "PR を作成: ${url}"
@@ -121,13 +109,11 @@ for branch in "$@"; do
   case "${branch}" in
     '' | "${PREFIX}"/*) continue ;;
   esac
-  rc=0
-  push_branch "${branch}" || rc=$?
-  case "${rc}" in
-    0) sync_pr "${branch}" || failed=1 ;;
-    1) ;;
-    *) failed=1 ;;
-  esac
+  if push_branch "${branch}"; then
+    sync_pr "${branch}" || failed=1
+  else
+    failed=1
+  fi
 done
 
 # 通らなかったブランチがあれば呼び出し元（Actions のジョブ）を赤くする。

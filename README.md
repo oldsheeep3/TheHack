@@ -181,8 +181,9 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 ログイン済み）で、自分の資格情報を使う。GitHub Actions はその VPS に SSH して起動をかけるだけ
 なので、この public リポジトリに置く secret は tailnet への参加情報と SSH 鍵だけで済む。
 
-**`.github/` は同期しない。** 個人リポジトリ側の CI 設定をハッカソン用リポジトリへ持ち込まないよう、
-ミラーする前に履歴ごと除去する（ミラー先にはファイルも過去の blob も残らない）。
+`.github/` を含め、履歴をそのまま送る（コミット SHA も個人リポジトリ側と一致する）。ミラー先では
+CI を走らせないよう、[`ci.yml`](.github/workflows/ci.yml) と [`mirror.yml`](.github/workflows/mirror.yml)
+の両方がリポジトリのオーナーを見てジョブを skip する。
 
 ```text
 手元 ── git push origin ──→ oldsheeep3/TheHack (public)
@@ -191,8 +192,7 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
                                   ├ tailscale/github-action で tailnet に参加
                                   └ ssh ──→ VPS: mirror-sync <branch>
                                               ├ 個人リポジトリから fetch（~/mirror/TheHack.git）
-                                              ├ filter.sh  … .github を履歴ごと除いて書き換え
-                                              └ mirror.sh  … mirror/X を push + PR 作成
+                                              └ mirror.sh  … mirror/X を push + PR 作成 + マージ
                                                               ↓
                                               NxTEND-THE-HACK/2026-Team-38 (private)
 ```
@@ -204,17 +204,11 @@ CI 対象外（ローカル/Windows でのみ検証可能）:
 1. [`.github/workflows/mirror.yml`](.github/workflows/mirror.yml) が tailnet に ephemeral ノードとして参加し、
    VPS へ SSH して [`mirror-sync X`](tools/mirror/mirror-sync) を実行する（CI が通った `X` だけが対象）
 2. VPS が個人リポジトリから `X` を fetch し、[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh) を呼ぶ
-3. [`tools/mirror/filter.sh`](tools/mirror/filter.sh) が `X` の履歴を `.github/` 抜きに書き換える
-   （`.github/` しか触っていないコミットは消える）
-4. 書き換え後の tip をミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
-5. `mirror/X` → `X` の PR を作成（既にオープンならそれを使う）し、**マージコミットでマージする**
+3. ミラー先の **`mirror/X`**（ミラー専用ブランチ）へ push
+4. `mirror/X` → `X` の PR を作成（既にオープンならそれを使う）し、**マージコミットでマージする**
 
 起点が GitHub 側にあるので、どのマシンから push しても（GitHub 上で直接編集しても）ミラーされる。
 同期するのは CI が通ったそのブランチだけ。全ブランチ + 全タグをまとめて送るのは手動実行のとき。
-
-書き換えは著者・コミッタ・日時・メッセージをそのまま引き継ぐので**決定的**で、同じコミットからは
-必ず同じ SHA が出る。よって 2 回目以降も `mirror/X` へ fast-forward で push できる。ただし
-**ミラー先のコミット SHA は個人リポジトリ側とは一致しない**（署名も落ちる）。
 
 ミラー先の `main` / `develop` へ直接 push も force push もしない。force は「手元で rebase / amend して
 `mirror/X` が fast-forward できなくなった」場合のフォールバックとして `mirror/*` に対してのみ使う。
@@ -226,10 +220,8 @@ Actions が使えないとき（ワークフローの失敗、tailnet の不調�
 | 場所 | もの | 役割 |
 | --- | --- | --- |
 | GitHub | `.github/workflows/mirror.yml` | tailnet に参加して VPS へ SSH し `mirror-sync` を起動 |
-| VPS | `~/mirror/TheHack.git` | 書き換え作業用の bare リポジトリ（remote: `personal` / `hackathon`） |
-| VPS | `~/mirror/mirror.sh` | `mirror/X` の push と PR 作成（[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh)） |
-| VPS | `~/mirror/filter.sh` | `.github/` を履歴ごと除いた履歴へ書き換え（[`tools/mirror/filter.sh`](tools/mirror/filter.sh)） |
-| VPS | `~/mirror/filter-map` | 元コミット → 書き換え後コミットの対応表（追記のみ。増分処理に使う） |
+| VPS | `~/mirror/TheHack.git` | 中継用の bare リポジトリ（remote: `personal` / `hackathon`） |
+| VPS | `~/mirror/mirror.sh` | `mirror/X` の push・PR 作成・マージ（[`tools/mirror/mirror.sh`](tools/mirror/mirror.sh)） |
 | VPS | `~/.local/bin/mirror-sync` | 個人リポジトリから取り込んで同期（[`tools/mirror/mirror-sync`](tools/mirror/mirror-sync)） |
 
 セットアップ:
@@ -272,17 +264,10 @@ tailnet の ACL で `tag:ci` から VPS の 22/tcp を許可しておくこと�
 >   今すぐミラーしたいときは VPS で `mirror-sync <branch>` を叩くか、Actions から手動実行する。
 > - ミラーの実行は `concurrency` で 1 本に絞っている。実行中 + 待機中がいる状態でさらに CI が
 >   green になると待機中が追い出され、そのブランチは次の CI green まで待つ。
-> - 除外パスは `MIRROR_EXCLUDE`（トップレベル名を空白区切り、既定 `.github`）で変えられる。
->   変更したら `filter-map` を消して履歴を作り直すこと。
-> - タグは書き換え後のコミットを指す**軽量タグ**として送る（注釈タグのメッセージは落ちる）。
-> - `refs/filtered/*` を消してしまったら `filter-map` も消す。残したままだと、gc で消えた
->   コミットを参照して失敗する。
-
-**`.github/` 除去への切り替え時に一度だけ必要な作業**: 書き換えで SHA が変わるため、ミラー先の
-`main` / `develop` に除去前の履歴が入っていると `mirror/X` と共通の祖先が無くなり、PR を作っても
-マージできない。`mirror.sh` はこれを検出して警告を出し PR をスキップするので、ミラー先の
-`main` / `develop` を一度 `mirror/main` / `mirror/develop` の内容に合わせ直す（ブランチ保護を
-外して force push するか、ミラー先で作り直す）。以降は通常どおり fast-forward で進む。
+> - `.github/workflows/` も同期するので、VPS の `gh` ログインには **`workflow` スコープ**が要る
+>   （`gh auth refresh -h github.com -s workflow`）。無いと push が拒否される。
+> - タグは手動同期（引数なしの `mirror-sync`）のときにまとめて送る。ミラー先で既に別のコミットを
+>   指しているタグは上書きしない。
 
 ## 共通プロトコル / ポート
 

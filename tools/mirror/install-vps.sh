@@ -5,7 +5,9 @@
 #   ssh <vps> 'bash ~/mirror-install/install-vps.sh'
 #
 # 前提: VPS に git と gh があり、`gh auth status` が成功し、`gh auth setup-git` 済みで
-#       ミラー先リポジトリ（private）に push・PR のマージができること。
+#       ミラー先リポジトリ（private）に push・PR のマージができること。`.github/workflows/`
+#       も同期するので、gh のログインには workflow スコープが要る
+#       （`gh auth refresh -h github.com -s workflow`）。
 set -euo pipefail
 
 MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
@@ -22,7 +24,7 @@ gh auth status >/dev/null 2>&1 || { echo "gh にログインしていません" 
 
 mkdir -p "$MIRROR_HOME" "$BIN_DIR"
 
-# 履歴の書き換え用 bare リポジトリ。作業ツリーは要らない。
+# 個人リポジトリとミラー先の中継に使う bare リポジトリ。作業ツリーは要らない。
 if [ ! -d "$REPO_DIR" ]; then
   git init --quiet --bare "$REPO_DIR"
   echo "created $REPO_DIR"
@@ -36,17 +38,17 @@ git -C "$REPO_DIR" remote add personal  "https://github.com/${SOURCE_REPO}"
 git -C "$REPO_DIR" remote add hackathon "https://github.com/${TARGET_REPO}"
 
 install -m 755 "$src/mirror.sh"   "$MIRROR_HOME/mirror.sh"
-install -m 755 "$src/filter.sh"   "$MIRROR_HOME/filter.sh"
 install -m 755 "$src/mirror-sync" "$BIN_DIR/mirror-sync"
 
-# 中継 push を受けていた頃の名残。今は GitHub Actions が SSH で mirror-sync を叩くので不要。
-rm -f "$REPO_DIR/hooks/post-receive"
+# 中継 push を受けていた頃の名残と、.github を除いていた頃の履歴フィルタ。今はどちらも不要。
+rm -f "$REPO_DIR/hooks/post-receive" "$MIRROR_HOME/filter.sh" "$MIRROR_HOME/filter-map"
+git -C "$REPO_DIR" for-each-ref --format='delete %(refname)' refs/filtered \
+  | git -C "$REPO_DIR" update-ref --stdin
 
 echo
 echo "installed:"
 echo "  作業リポジトリ : $REPO_DIR"
 echo "  ミラー本体     : $MIRROR_HOME/mirror.sh"
-echo "  履歴フィルタ   : $MIRROR_HOME/filter.sh（.github を履歴ごと除く）"
 echo "  同期コマンド   : $BIN_DIR/mirror-sync"
 echo
 echo "Actions から叩けるようにする手順（SSH 鍵・tailnet ACL・secret）は README「ミラー」を参照。"
