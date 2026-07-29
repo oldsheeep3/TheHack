@@ -1,13 +1,16 @@
-# ハッカソン用リポジトリへのミラーの起動役。tailnet に入って VPS へ SSH し、あとは
-# 向こうの mirror-sync に任せる（push も PR もマージも VPS 自身の gh ログインで行う）。
+# ハッカソン用リポジトリへのミラーの起動役。CI が green になったら tailnet に入って VPS へ
+# SSH し、あとは向こうの mirror-sync に任せる（push も PR もマージも VPS の gh ログインで行う）。
 # 必要な secret とセットアップ手順は README「ミラー」を参照。
 name: Mirror to hackathon repo
 
 on:
-  push:
-    branches: ['**']
-    tags: ['**']
-  # 手動実行（push を伴わない取りこぼしの回収用）。
+  # push を直接拾わず、CI が green で終わった実行だけを拾う（壊れたコミットを送らない）。
+  # workflow_run はデフォルトブランチにあるファイルしか起動しないので、このワークフローは
+  # main にも入れておく必要がある。
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # 手動実行（CI が走らないブランチや、取りこぼしの回収用）。
   workflow_dispatch:
 
 # VPS 側の作業リポジトリは 1 つなので、ref をまたいで常に 1 本だけ流す。
@@ -22,8 +25,12 @@ permissions:
 jobs:
   mirror:
     name: Trigger mirror on the VPS
-    # 自己ループ防止と、ブランチ削除（ミラー先の ref は消さない）のスキップ。
-    if: github.repository_owner != 'NxTEND-THE-HACK' && github.event.deleted != true
+    # 自己ループ防止と、「push 由来で success だった CI」に限定する条件。
+    if: >-
+      github.repository_owner != 'NxTEND-THE-HACK'
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event.workflow_run.event == 'push'
+              && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
     steps:
       - name: Check secrets
