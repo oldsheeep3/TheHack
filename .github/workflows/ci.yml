@@ -16,9 +16,16 @@ concurrency:
 permissions:
   contents: read
 
+# ミラー先の NxTEND-THE-HACK/2026-Team-38 では CI を走らせない。あちらは Free org の
+# private リポジトリで Actions のランナーが割り当てられず、どのジョブも 0 ステップのまま
+# 即座に失敗する（ワークフローの不具合ではないので直しようがない）。検証は public な
+# 個人リポジトリ側で行い、ミラー先には結果を持ち込まない。
+# ジョブレベルの if はランナー要求より前に評価されるので、skip されたジョブは失敗しない。
+
 jobs:
   dotnet:
     name: .NET (build / format / test)
+    if: github.repository_owner != 'NxTEND-THE-HACK'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +71,7 @@ jobs:
 
   phone-bridge:
     name: phone-bridge (lint / build / test)
+    if: github.repository_owner != 'NxTEND-THE-HACK'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,6 +107,7 @@ jobs:
 
   firmware:
     name: Firmware host tests (gcc)
+    if: github.repository_owner != 'NxTEND-THE-HACK'
     runs-on: ubuntu-latest
     steps:
       # ホストテストは I/O 非依存の純粋関数のみが対象で、ch32v003fun サブモジュール
@@ -114,7 +123,9 @@ jobs:
   # ブランチ保護の必須チェックはこの 1 つを指定すれば足りる。
   all-green:
     name: All checks
-    if: always()
+    # always() だけだと上の 3 つが skip されたミラー先でもこのジョブが走ってしまうので、
+    # 同じ条件を明示的に AND する。
+    if: always() && github.repository_owner != 'NxTEND-THE-HACK'
     needs: [dotnet, phone-bridge, firmware]
     runs-on: ubuntu-latest
     steps:
