@@ -35,15 +35,15 @@ jobs:
     steps:
       - name: Check secrets
         env:
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_CLIENT: ${{ secrets.TS_CLIENT }}
+          TS_SECRET: ${{ secrets.TS_SECRET }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
         run: |
           set -eu
           missing=''
-          for name in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET SSH_HOST SSH_USER SSH_KEY; do
+          for name in TS_CLIENT TS_SECRET SSH_HOST SSH_USER SSH_KEY; do
             eval "value=\${$name:-}"
             [ -n "$value" ] || missing="$missing $name"
           done
@@ -56,8 +56,8 @@ jobs:
       - name: Join tailnet
         uses: tailscale/github-action@v4
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ secrets.TS_CLIENT }}
+          oauth-secret: ${{ secrets.TS_SECRET }}
           tags: ${{ vars.TS_TAG || 'tag:ci' }}
 
       - name: Run mirror-sync over SSH
