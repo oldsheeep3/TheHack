@@ -251,9 +251,9 @@ ssh sheep 'bash -lc "mirror-sync develop"'
 | secret | 中身 |
 | --- | --- |
 | `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET` | Tailscale の OAuth クライアント（scope `auth_keys` write / tag `tag:ci`） |
-| `MIRROR_SSH_HOST` / `MIRROR_SSH_USER` | VPS の tailnet 名（or 100.x）とユーザー名 |
-| `MIRROR_SSH_KEY` | 上で作った秘密鍵 `mirror_ci` の中身 |
-| `MIRROR_SSH_KNOWN_HOSTS` | VPS のホスト鍵（`ssh-keyscan <host>` の出力）。任意だが推奨 |
+| `SSH_HOST` / `SSH_USER` | VPS の tailnet アドレス（100.x or MagicDNS 名）とログインユーザー名 |
+| `SSH_KEY` | ログインに使う**秘密鍵**（`mirror_ci` の中身。公開鍵は VPS の `authorized_keys` へ） |
+| `SSH_KNOWN_HOSTS` | VPS のホスト鍵（`ssh-keyscan <host>` の出力）。任意だが推奨 |
 
 tailnet の ACL で `tag:ci` から VPS の 22/tcp を許可しておくこと。
 
