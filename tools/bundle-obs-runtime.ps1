@@ -1,4 +1,4 @@
-<#
+﻿<#
     Assembles the OBS runtime that ships alongside Switcher, so the app needs no OBS installation.
 
     Switcher's video engine is libobs. Rather than requiring every machine to install OBS Studio, a

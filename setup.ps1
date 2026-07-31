@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Windows 側のセットアップ（setup.sh の対）。switcher-engine.dll までを自動で用意する。
 
@@ -103,6 +103,18 @@ function Write-Note { param([string]$Text) Write-Host "  $Text" -ForegroundColor
 function Write-Warn { param([string]$Text) Write-Host "  warn $Text" -ForegroundColor Yellow; $script:Warnings += $Text }
 function Write-Fail { param([string]$Text) Write-Host "  NG   $Text" -ForegroundColor Red;    $script:Failures += $Text }
 
+# PowerShell 5.1 では、ネイティブコマンドの stderr をリダイレクトすると各行が
+# ErrorRecord (NativeCommandError) に包まれる。$ErrorActionPreference='Stop' の下では
+# それが終了エラーになり、終了コード 0 でもその場でスクリプトごと落ちる。
+# cmake も git も進捗や警告を平然と stderr に出すので、stderr を捨てる呼び出しは
+# すべてこれ経由にして、その間だけ Continue に落とす。$LASTEXITCODE は素通りする。
+function Invoke-Native {
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Command } finally { $ErrorActionPreference = $prev }
+}
+
 # ---------------------------------------------------------------------------
 # 0. 前提チェック
 # ---------------------------------------------------------------------------
@@ -115,22 +127,36 @@ if ($env:OS -ne 'Windows_NT') {
     exit 1
 }
 
-foreach ($tool in @('git', 'cmake')) {
-    $cmd = Get-Command $tool -ErrorAction SilentlyContinue
-    if ($cmd) { Write-Ok "$tool ($((& $tool --version | Select-Object -First 1)))" }
-    else      { Write-Fail "$tool が PATH に無い" }
-}
-
 # MSVC。cmake -A x64 は VS を自前で見つけるが、見つからない環境を先に弾いておく。
+# cmake の在り処を VS から引くので、ツールの確認より先に済ませる。
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $VsPath = $null
 if (Test-Path $vswhere) {
-    $VsPath = & $vswhere -latest -products * `
+    $VsPath = Invoke-Native { & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -property installationPath 2>$null | Select-Object -First 1
+        -property installationPath 2>$null } | Select-Object -First 1
 }
 if ($VsPath) { Write-Ok "Visual Studio (C++): $VsPath" }
 else         { Write-Fail "Visual Studio 2022 の「C++によるデスクトップ開発」が見つからない" }
+
+$git = Get-Command git -ErrorAction SilentlyContinue
+if ($git) { Write-Ok "git ($(& git --version | Select-Object -First 1))" }
+else      { Write-Fail "git が PATH に無い" }
+
+# cmake は単体で入れていなくても VS に同梱されている（「C++によるデスクトップ開発」に含まれる）。
+# build.bat は子プロセスから素の `cmake` を呼ぶので、PATH そのものに足しておく。
+# こうしておけば build.bat 側は手を入れずに済み、環境変数は子プロセスへ継承される。
+$cmake = Get-Command cmake -ErrorAction SilentlyContinue
+if (-not $cmake -and $VsPath) {
+    $bundledCMake = Join-Path $VsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
+    if (Test-Path (Join-Path $bundledCMake 'cmake.exe')) {
+        $env:PATH = "$bundledCMake;$env:PATH"
+        $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+        Write-Note "VS 同梱の cmake を PATH に追加した: $bundledCMake"
+    }
+}
+if ($cmake) { Write-Ok "cmake ($(& cmake --version | Select-Object -First 1))" }
+else        { Write-Fail "cmake が PATH に無く、VS 同梱のものも見つからない" }
 
 # ---------------------------------------------------------------------------
 # 1. OBS の検出とバージョン決定
@@ -208,7 +234,7 @@ $LibObsInclude = $null
 function Resolve-ObsTag {
     param([string]$Version)
     # OBS の tag は素の "32.0.4"。無ければ同じ major.minor で最新のものに寄せる。
-    $tags = (& git ls-remote --tags --refs $ObsRepo 2>$null) |
+    $tags = (Invoke-Native { & git ls-remote --tags --refs $ObsRepo 2>$null }) |
         ForEach-Object { ($_ -split '/')[-1] } |
         Where-Object { $_ -match '^\d+\.\d+\.\d+$' }
     if (-not $tags) { return $Version }   # ネットワーク不通。そのまま試す。
@@ -258,8 +284,8 @@ if ($SkipLibobs) {
         } else {
             # 既存ツリーを目的の tag に合わせ直す（版を切り替えたときのため）。
             Push-Location $ObsSourceDir
-            & git fetch --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}" 2>$null | Out-Null
-            & git checkout --quiet $tag 2>$null
+            Invoke-Native { & git fetch --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}" 2>$null } | Out-Null
+            Invoke-Native { & git checkout --quiet $tag 2>$null }
             if ($LASTEXITCODE -eq 0) {
                 & git submodule update --init --recursive --depth 1 | Out-Null
                 Write-Ok "obs-studio を $tag に切り替えた"
@@ -283,7 +309,7 @@ if ($SkipLibobs) {
             Push-Location $ObsSourceDir
             Write-Host "  cmake configure..."
             # 近年の OBS は preset が依存物の取得までやる。preset の無い古い版は素の generator に落とす。
-            & cmake --preset windows-x64 2>$null
+            Invoke-Native { & cmake --preset windows-x64 }
             if ($LASTEXITCODE -ne 0) {
                 Write-Note "preset windows-x64 が使えないので generator 指定にフォールバック"
                 & cmake -S . -B $buildDir -G 'Visual Studio 17 2022' -A x64
@@ -453,3 +479,7 @@ App 出力へコピーする。
 状態だけ見るとき:    .\setup.ps1 -Check
 "@
 }
+
+# 明示しないと直前のネイティブコマンドの $LASTEXITCODE がそのまま終了コードになる。
+# .NOTES の「0 = 準備完了」を守るため、成功パスでも必ず 0 を返す。
+exit 0
