@@ -101,7 +101,11 @@
                            Margin="0,16,0,0" />
                 <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,2,0,6"
                            Text="Add an SRT source and pick this ATEM there, and this PC waits for its program feed on the address below. Enter that address in the ATEM's streaming settings — or let the button try to set it for you." />
-                <TextBox x:Name="StreamUrlBox" IsReadOnly="True" />
+                <TextBlock Text="This PC's address, as the ATEM sees it" Style="{StaticResource MicroLabel}" />
+                <ComboBox x:Name="StreamHostCombo" SelectionChanged="OnStreamHostChanged" Margin="0,2,0,0"
+                          ToolTip="Every address this PC has. If it is on more than one network, pick the one the ATEM shares — the top entry is only a guess." />
+                <TextBox x:Name="StreamUrlBox" Margin="0,4,0,0"
+                         ToolTip="The address the ATEM dials, e.g. srt://192.168.10.20:9000. Editable — type one in if this PC is reached through an address the list cannot know." />
                 <Button x:Name="ConfigureStreamButton" Content="Configure the ATEM's streaming output"
                         Click="OnConfigureStreamingClick" Margin="0,6,0,0" HorizontalAlignment="Stretch" />
                 <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0"

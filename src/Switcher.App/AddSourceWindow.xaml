@@ -71,9 +71,11 @@
                     <TextBox x:Name="SrtLatencyBox" Text="40" />
                     <Button Content="Use recommended URL" Click="OnUseRecommendedSrtUrlClick" Margin="0,6,0,0" />
                     <TextBlock x:Name="SrtSetupText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                    <TextBox x:Name="SrtRecommendedUrlBox" IsReadOnly="True" />
-                    <ListBox x:Name="SrtHostsList" MaxHeight="60" Background="{DynamicResource Canvas}"
-                             Foreground="{DynamicResource Text}" BorderBrush="{DynamicResource Line}" />
+                    <TextBlock Text="This PC's address, as the sender sees it" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <ComboBox x:Name="SrtHostCombo" SelectionChanged="OnSrtHostChanged"
+                              ToolTip="Every address this PC has. If it is on more than one network, pick the one the sender shares — the top entry is only a guess." />
+                    <TextBox x:Name="SrtRecommendedUrlBox"
+                             ToolTip="The address the sender dials. Editable — type one in if this PC is reached through an address the list cannot know." />
                     <TextBlock x:Name="SrtAtemText" Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,6,0,0" />
                 </StackPanel>
 
