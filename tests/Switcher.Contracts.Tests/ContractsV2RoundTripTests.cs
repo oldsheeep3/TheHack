@@ -111,13 +111,13 @@ public class ContractsV2RoundTripTests
         var request = new OutputsRequest(new[]
         {
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm1, 1, true, true),
+            new OutputAssignment(OutputSink.Hdmi1, OutputSource.Pgm1, 1, true, true),
         });
 
         var json = JsonSerializer.Serialize(request, Options);
 
         Assert.Contains("\"sink\":\"VCAM1\"", json);
-        Assert.Contains("\"sink\":\"HDMI\"", json);
+        Assert.Contains("\"sink\":\"HDMI1\"", json);
         Assert.Contains("\"display_id\":1", json);
         Assert.Contains("\"hide_cursor\":true", json);
         Assert.Contains("\"fullscreen\":true", json);

@@ -5,9 +5,16 @@ namespace Switcher.Web;
 /// <summary>
 /// Validates <see cref="OutputsRequest"/> payloads received on <c>PUT /api/v1/outputs</c>
 /// (docs/specs/00-system-overview.md §4.2, docs/specs/multiview-output-revision.md §4.2): each sink
-/// assigned at most once, an HDMI output must specify which display to drive, and NDI outputs may only
-/// carry a program bus source (PGM1/PGM2) with a non-empty <c>ndi_name</c> when one is supplied
-/// (a null <c>ndi_name</c> is allowed and defaulted by the App).
+/// assigned at most once, at most <see cref="OutputCatalog.MaxOf"/> sinks of any one kind and at most
+/// <see cref="OutputCatalog.MaxTotal"/> altogether, an HDMI output must specify which display to drive,
+/// and NDI outputs may only carry a program bus source (PGM1/PGM2) with a non-empty <c>ndi_name</c> when
+/// one is supplied (a null <c>ndi_name</c> is allowed and defaulted by the App).
+/// <para>
+/// The per-sink rules key off <see cref="OutputCatalog.KindOf"/> rather than naming individual sinks. The
+/// table used to be a fixed set with exactly one display and one webcam sink, so the checks could name
+/// them; now that the operator adds up to three of each, a rule written against <c>HDMI1</c> alone would
+/// wave <c>HDMI2</c> and <c>HDMI3</c> through with no display to open a projector on.
+/// </para>
 /// </summary>
 public static class OutputsRequestValidator
 {
@@ -35,12 +42,14 @@ public static class OutputsRequestValidator
                 errors.Add($"outputs[{i}].sink '{output.Sink}' is assigned more than once.");
             }
 
-            if (output.Sink == OutputSink.Hdmi && output.DisplayId is null)
+            var kind = OutputCatalog.KindOf(output.Sink);
+
+            if (kind == OutputKind.Hdmi && output.DisplayId is null)
             {
                 errors.Add($"outputs[{i}].display_id is required when sink is HDMI.");
             }
 
-            if (output.Sink is OutputSink.Ndi1 or OutputSink.Ndi2)
+            if (kind == OutputKind.Ndi)
             {
                 if (output.Source is not (OutputSource.Pgm1 or OutputSource.Pgm2))
                 {
@@ -53,6 +62,8 @@ public static class OutputsRequestValidator
                 }
             }
         }
+
+        errors.AddRange(OutputRules.DescribeOverLimit(request.Outputs));
 
         if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(request.Outputs)) is { } missing)
         {

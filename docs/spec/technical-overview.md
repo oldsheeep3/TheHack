@@ -170,12 +170,23 @@ QApplication は不要。検証環境: OBS 32.0.4 / CEF 127。
 
 ### 2.10 出力
 
+sink は固定の5系統ではなく、オペレーターが編集する**可変テーブル**。種別（Webcam / HDMI / NDI）＋序数で
+`VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3` を表し、上限は **Webcam 1・HDMI 3・NDI 3・合計6**
+（`OutputCatalog.MaxWebcamSinks` / `MaxSinksPerKind` / `MaxTotal`、判定は `MaxOf(kind)`）。初期状態は
+`VCAM1`＋`HDMI1` の2出力で、そこから追加する。
+序数なしの旧トークン（`"VCAM"` / `"HDMI"` / `"NDI"`）は各種別の1番目として読むため、既存の
+`runtime-config.json` はそのまま動く。`VCAM2` / `VCAM3` もトークンとしては読める（旧ビルドの設定が
+壊れずに読み込めるようにするため）が、オペレーターが追加することはできない。
+
 | Sink | 実体 |
 |---|---|
-| `VCAM1` | `virtualcam_output`（OBS の仮想カメラは1つだけ） |
-| `VCAM2` | NDI 送出（仮想カメラが1つしかないため） |
-| `NDI1` / `NDI2` | NDI 送出 |
-| `HDMI` | `engine_start_display(target, hwnd, display_id)`。HWND はアプリ側が所有 |
+| `VCAM1` | `virtualcam_output`（OBS の仮想カメラは1つだけ。だから Webcam は1本まで） |
+| `VCAM2` / `VCAM3`（旧ビルド互換） | NDI 送出 `SWITCHER VCAM2` / `SWITCHER VCAM3`。新規に追加はできない |
+| `NDI1`〜`NDI3` | NDI 送出（既定の送出名は `SWITCHER PGM1`〜`SWITCHER PGM3`） |
+| `HDMI1`〜`HDMI3` | `engine_start_display(target, hwnd, display_id)`。HWND はアプリ側が所有 |
+
+表示の対象トークンは `PGM1`/`PGM2` ではなく **sink トークンそのもの**（`HDMI1`…）。同じバスに割り当てた
+2つの HDMI sink が、それぞれ独立した全画面ウィンドウを持てるようにするため。
 
 各出力は `obs_output_set_media(output, program_video, obs_get_audio())` に加えて
 `obs_output_set_mixer(output, bus)` を受ける。これがないと PGM2 の絵を運ぶ出力が PGM1 の音を運ぶ。
@@ -183,9 +194,10 @@ QApplication は不要。検証環境: OBS 32.0.4 / CEF 127。
 **ルーティングの制約**: PGM1 / PGM2 は **それぞれ最低1つの出力**を持たなければならない
 （`OutputRules.MissingBuses`。Web バリデータと `AppOrchestrator.ApplyOutputsAsync` の両方で強制）。
 2系統 M/E は2系統を同時に出すためのものなので、どこにも出ていない PGM は設定ではなく結線ミスとして扱う。
+既定が `VCAM1` 1本ではなく `VCAM1`＋`HDMI1` なのも、この規則を満たす最小構成だから。
 
 **割当と実際に出ているかは別**: 個々の sink の失敗は全体を止めない（他の sink を巻き添えにしないため）
-ので、割当表を見ても「NDI ランタイムが無くて VCAM2 が起動しなかった」ことは分からない。
+ので、割当表を見ても「NDI ランタイムが無くて NDI1 が起動しなかった」ことは分からない。
 `engine_get_output_status` が sink ごとの `running` を返し、`OutputRules.BusesWithoutRunningOutput` が
 「割当はあるのに1つも動いていないバス」を判定する。オペレーター画面は Apply 時に警告を出し、起動時の
 復元ではログに残す。HDMI は全画面ウィンドウが開いて初めて running になる。

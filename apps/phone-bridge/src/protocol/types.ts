@@ -188,19 +188,89 @@ export function isMultiviewConfig(value: unknown): value is MultiviewConfig {
   return Array.isArray(cells) && cells.length === MULTIVIEW_CELL_COUNT && cells.every(isMultiviewCell)
 }
 
-// --- §4.2 Output assignment (virtual cameras x2 + HDMI) ----------------------
+// --- §4.2 Output assignment (operator-built table: webcam / HDMI / NDI) ------
+// The table is no longer a fixed set of sinks. It starts at one webcam plus one display and the
+// operator adds sinks of a kind, at most maxOutputsOf(kind) of each and MAX_OUTPUTS in total.
 
-export type OutputSink = 'VCAM1' | 'VCAM2' | 'HDMI'
+export type OutputKind = 'WEBCAM' | 'HDMI' | 'NDI'
 
-export const OUTPUT_SINKS: readonly OutputSink[] = ['VCAM1', 'VCAM2', 'HDMI']
+export const OUTPUT_KINDS: readonly OutputKind[] = ['WEBCAM', 'HDMI', 'NDI']
 
+export function isOutputKind(value: unknown): value is OutputKind {
+  return typeof value === 'string' && (OUTPUT_KINDS as readonly string[]).includes(value)
+}
+
+export type WebcamOutputSink = 'VCAM1' | 'VCAM2' | 'VCAM3'
+export type HdmiOutputSink = 'HDMI1' | 'HDMI2' | 'HDMI3'
+export type NdiOutputSink = 'NDI1' | 'NDI2' | 'NDI3'
+
+export type OutputSink = WebcamOutputSink | HdmiOutputSink | NdiOutputSink
+
+export const WEBCAM_OUTPUT_SINKS: readonly WebcamOutputSink[] = ['VCAM1', 'VCAM2', 'VCAM3']
+
+export const HDMI_OUTPUT_SINKS: readonly HdmiOutputSink[] = ['HDMI1', 'HDMI2', 'HDMI3']
+
+export const NDI_OUTPUT_SINKS: readonly NdiOutputSink[] = ['NDI1', 'NDI2', 'NDI3']
+
+export const OUTPUT_SINKS: readonly OutputSink[] = [
+  ...WEBCAM_OUTPUT_SINKS,
+  ...HDMI_OUTPUT_SINKS,
+  ...NDI_OUTPUT_SINKS,
+]
+
+/**
+ * Most webcam sinks the output table may hold — one, because OBS exposes a single virtual camera. A
+ * second webcam sink could only be honoured by sending it somewhere that is not a camera, so it is not
+ * offered. `VCAM2`/`VCAM3` keep their tokens only so configs written by older builds still parse.
+ */
+export const MAX_WEBCAM_OUTPUTS = 1
+
+/** Most sinks of any other kind the output table may hold. */
+export const MAX_SINKS_PER_KIND = 3
+
+/** Most sinks of `kind` the output table may hold. */
+export function maxOutputsOf(kind: OutputKind): number {
+  return kind === 'WEBCAM' ? MAX_WEBCAM_OUTPUTS : MAX_SINKS_PER_KIND
+}
+
+/** Most sinks the output table may hold in total, across all kinds. */
+export const MAX_OUTPUTS = 6
+
+/**
+ * Only canonical ordinal tokens, and every token a table may carry rather than every sink an operator
+ * may add — `VCAM2`/`VCAM3` still parse so tables written by older builds load. Builds that predate
+ * multiple sinks per kind wrote `"HDMI"`/`"VCAM"` without an ordinal; the PC reads those as the first
+ * sink of the kind and rewrites them canonically, so nothing this client is served still carries them.
+ */
 export function isOutputSink(value: unknown): value is OutputSink {
   return typeof value === 'string' && (OUTPUT_SINKS as readonly string[]).includes(value)
 }
 
-export type OutputAssignment =
-  | { sink: 'VCAM1' | 'VCAM2'; source: PgmBus }
-  | { sink: 'HDMI'; source: PgmBus; display_id: number; hide_cursor: boolean; fullscreen: boolean }
+export interface WebcamOutputAssignment {
+  sink: WebcamOutputSink
+  source: PgmBus
+}
+
+export interface HdmiOutputAssignment {
+  sink: HdmiOutputSink
+  source: PgmBus
+  display_id: number
+  hide_cursor: boolean
+  fullscreen: boolean
+}
+
+export interface NdiOutputAssignment {
+  sink: NdiOutputSink
+  source: PgmBus
+  /** Sender name published on the network; the PC fills in a default when omitted. */
+  ndi_name?: string | null
+}
+
+export type OutputAssignment = WebcamOutputAssignment | HdmiOutputAssignment | NdiOutputAssignment
+
+export function isHdmiOutput(value: OutputAssignment): value is HdmiOutputAssignment {
+  return (HDMI_OUTPUT_SINKS as readonly string[]).includes(value.sink)
+}
 
 export interface OutputsConfig {
   outputs: OutputAssignment[]

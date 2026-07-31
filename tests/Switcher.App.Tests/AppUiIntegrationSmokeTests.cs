@@ -1,5 +1,6 @@
 using Switcher.App.Display;
 using Switcher.App.Multiview;
+using Switcher.App.ViewModels;
 using Switcher.Contracts;
 
 namespace Switcher.App.Tests;
@@ -55,6 +56,19 @@ public sealed class AppUiIntegrationSmokeTests
         ]));
         var ndi1 = Assert.Single(harness.Engine.CurrentAssignments, a => a.Sink == OutputSink.Ndi1);
         Assert.Equal("STUDIO PGM1", ndi1.NdiName);
+
+        // (5b) The Outputs dock's own table: seeded from the routing that is now live, an HDMI sink added
+        // through the same affordance the operator's + button drives, and applied back.
+        var outputs = new OutputTableViewModel();
+        outputs.Load(harness.Engine.CurrentAssignments);
+        Assert.Equal(3, outputs.Rows.Count);
+
+        var added = outputs.Add(OutputKind.Hdmi);
+        Assert.Equal(OutputSink.Hdmi1, added!.Sink);
+        Assert.Empty(outputs.Validate());
+
+        await harness.Orchestrator.ApplyOutputsAsync(outputs.ToRequest());
+        Assert.Contains(harness.Engine.CurrentAssignments, a => a.Sink == OutputSink.Hdmi1);
 
         // (6) Same-screen warning judgement (requirement 1/4).
         Assert.True(DisplayConflictEvaluator.ConflictsWithOperator(operatorDisplayIndex: 1, targetDisplayId: 1));

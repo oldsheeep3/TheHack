@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import type { ApiClient } from '../protocol/apiClient'
-import { PGM_BUSES, type OutputAssignment, type PgmBus } from '../protocol/types'
+import { PGM_BUSES, isHdmiOutput, type OutputAssignment, type PgmBus } from '../protocol/types'
 import { Section } from './ui'
 
+// The table a fresh PC starts from (§4.2): one webcam and one display, one per program bus.
 const DEFAULT_OUTPUTS: OutputAssignment[] = [
   { sink: 'VCAM1', source: 'PGM1' },
-  { sink: 'VCAM2', source: 'PGM2' },
-  { sink: 'HDMI', source: 'PGM1', display_id: 1, hide_cursor: true, fullscreen: true },
+  { sink: 'HDMI1', source: 'PGM2', display_id: 0, hide_cursor: true, fullscreen: true },
 ]
 
 interface OutputsPanelProps {
@@ -35,7 +35,7 @@ export function OutputsPanel({ apiClient, onError }: OutputsPanelProps): JSX.Ele
   }
 
   return (
-    <Section title="出力割当（仮想カメラ×2 / HDMI）">
+    <Section title="出力割当（Webcam / HDMI / NDI）">
       <div className="flex flex-col gap-3">
         {outputs.map((output, index) => (
           <div key={output.sink} className="flex flex-col gap-2 rounded-md bg-surface-2 px-3 py-2">
@@ -55,7 +55,7 @@ export function OutputsPanel({ apiClient, onError }: OutputsPanelProps): JSX.Ele
               </select>
             </label>
 
-            {output.sink === 'HDMI' && (
+            {isHdmiOutput(output) && (
               <>
                 <label className="flex items-center justify-between gap-2 text-sm text-text-primary">
                   ディスプレイID

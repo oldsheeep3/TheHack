@@ -40,9 +40,9 @@
 - [ ] 全画面表示先が操作画面ディスプレイと同一のときは §2.1 と同じ**同一画面警告（続行可能）**を出す。
 - [ ] 全画面中もマルチビューのライブ更新（各セルのプレビュー/枠色）を継続する。
 
-### 2.5 NDI 出力（2系統）（要件5）
-- [ ] 出力 sink に **NDI を2系統（NDI1 / NDI2）追加**する。ソースは **PGM1 / PGM2 のみ**（既定 PGM1→NDI1, PGM2→NDI2）。
-- [ ] 各 NDI 出力は **NDI送出名（sender name）を設定可能**（既定 `SWITCHER PGM1` / `SWITCHER PGM2`）。ネットワーク上に NDI ソースとして公開する。
+### 2.5 NDI 出力（要件5）
+- [ ] 出力 sink に **NDI（`NDI1`〜`NDI3`）を追加**する。ソースは **PGM1 / PGM2 のみ**（既定 PGM1→NDI1, PGM2→NDI2）。
+- [ ] 各 NDI 出力は **NDI送出名（sender name）を設定可能**（既定 `SWITCHER PGM1` / `SWITCHER PGM2` / `SWITCHER PGM3`）。ネットワーク上に NDI ソースとして公開する。
 - [ ] NDI SDK 未導入時は送出を無効化し、ソース追加と同様に**ダウンロード導線（案内）**を表示する（親 §2.1 の NDI 方針に準拠）。
 - [ ] 出力割当は `PUT /api/v1/outputs` で NDI sink を含めて動的変更（§4.1）。1 sink 障害が他 sink を止めない（既存 `OutputRouter` の障害隔離方針を踏襲）。
 
@@ -76,14 +76,17 @@
 
 ### 4.1 追加/変更エンドポイント・契約
 - **出力（拡張）** `PUT /api/v1/outputs`:
-  - `OutputSink` に **`NDI1` / `NDI2`** を追加（既存 `VCAM1/VCAM2/HDMI` は維持）。
+  - `OutputSink` は**種別＋序数**の可変テーブル（`00-system-overview.md` §4.2）: `VCAM1` /
+    `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`。既定は `VCAM1`＋`HDMI1`、上限は**Webcam 1・HDMI 3・NDI 3・合計6**。
+    序数なしの旧トークン（`"HDMI"`/`"VCAM"`/`"NDI"`）は各種別の1番目として読み、保存時に序数付きへ書き戻す。
+    `VCAM2`/`VCAM3` は旧ビルドの設定を読み込むためのトークンとしてのみ残り、新規には追加できない。
   - `OutputAssignment` に **`ndi_name`（string?）** を追加（NDI sink のときの送出名）。
   - 例:
     ```json
     {
       "outputs": [
         { "sink": "VCAM1", "source": "PGM1" },
-        { "sink": "HDMI",  "display_id": 1, "source": "PGM1", "hide_cursor": true, "fullscreen": true },
+        { "sink": "HDMI1", "display_id": 1, "source": "PGM1", "hide_cursor": true, "fullscreen": true },
         { "sink": "NDI1",  "source": "PGM1", "ndi_name": "SWITCHER PGM1" },
         { "sink": "NDI2",  "source": "PGM2", "ndi_name": "SWITCHER PGM2" }
       ]
@@ -110,7 +113,7 @@
   - `SrtSetupInfo` を返す（`listener_port`, `host_candidates`(LAN IPv4[]), 推奨URL文字列, `latency` 目安, 手順テキスト）。
 
 ### 4.2 バリデーション
-- `OutputsRequestValidator`: 各 sink は最大1回。HDMI は `display_id` 必須（既存）。**NDI1/NDI2 のとき `source` は PGM1/PGM2 のみ**、`ndi_name` 空文字不可（未指定は既定名で補完）。
+- `OutputsRequestValidator`: 各 sink は最大1回。**Webcam 1・HDMI 3・NDI 3・合計6を超えないこと**（`OutputRules.DescribeOverLimit`。旧ビルドの `VCAM1`＋`VCAM2` 既定はここで弾かれ、アプリは現行の既定へフォールバックする）。HDMI は `display_id` 必須（既存）。**NDI sink のとき `source` は PGM1/PGM2 のみ**、`ndi_name` 空文字不可（未指定は既定名で補完）。
 - `MultiviewLayoutValidator`: region 形式のとき、**全 region が矩形かつグリッド内**、**重なりなし・隙間なし（完全被覆）**、各 `content` が `PGM1/PGM2/PVW1/PVW2/SRC:<id>/EMPTY`。従来 `cells` 形式は既存規則（16セル）を維持。
 
 ### 4.3 影響コンポーネント（実装マップ）
@@ -127,7 +130,7 @@
 - Windows実行時依存（NDI/DirectShow/MF/D3D）はプロジェクト内に閉じ、テストはフェイク注入でヘッドレスCIでもビルド/テストが通ること。
 
 ## 6. UI/UX 設計方針
-- 出力割当パネル: sink 一覧（VCAM1/VCAM2/HDMI/NDI1/NDI2）＋ソース(PGM1/PGM2)＋HDMIはディスプレイ選択＋NDIは送出名。同一画面選択時に警告バナー。
+- 出力割当パネル: 既定の VCAM1＋HDMI1 に「出力を追加」（Webcam/HDMI/NDI）で sink を足す（Webcam 1・HDMI 3・NDI 3・合計6で追加不可に。Webcam は既定の1本で上限なので実質 HDMI/NDI を足す）＋ソース(PGM1/PGM2)＋HDMIはディスプレイ選択＋NDIは送出名。同一画面選択時に警告バナー。
 - マルチビュー: ドラッグで矩形セル選択→結合/解除。結合セルはラベル・枠色（PGM=赤/PVW=緑）を維持。全画面ボタン。
 - ソースドック: 名前(自由入力)→種別(ドロップダウン)→デバイス(ドロップダウン, 再スキャン)。SRTは接続設定＋ATEMヘルパー。
 - トレイ右クリック: `Show / 操作画面を移動 ▸ Display N / マルチビュー全画面 ▸ Display N / Exit`。
@@ -137,5 +140,10 @@
 - `claude`: 最大並列 2（親 `pc-switcher-app.md` §6 に準拠）。
 
 ## 8. 仕様変更履歴
+- **2026-07-31**: 出力 sink を固定5系統から**可変テーブル**へ改訂（`00-system-overview.md` §4.2 に追随）—
+  `VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3` をオペレーターが追加（既定 `VCAM1`＋`HDMI1`、Webcam 1・HDMI 3・NDI 3・合計6が上限）。
+  旧 `HDMI` は `HDMI1` に読み替え。実体のある仮想カメラは `VCAM1` のみなので **Webcam sink も1本まで**とし、
+  `VCAM2`/`VCAM3` は旧ビルドの設定を読み込むための互換トークン（エンジンは NDI 送出
+  `SWITCHER VCAM2` / `SWITCHER VCAM3` で処理）としてのみ残す。
 - **2026-07-18**: 初版作成。マルチビュー&出力改訂の7要件を定義 —
   ①全画面出力のディスプレイ指定＋同一画面警告(続行可)、②操作画面ディスプレイをトレイ右クリック等から変更・永続化、③マルチビューの矩形結合(ドラッグ, region化/cells後方互換)、④マルチビュー全画面(独立ウィンドウ, HDMI全画面と同等挙動, トレイ+メイン両導線)、⑤NDI出力2系統(NDI1/NDI2, PGM1/PGM2, 送出名設定)、⑥ソース追加3段UI(名前/種別/デバイス列挙, SRTは接続設定+ATEMヘルパー)、⑦SRTセットアップ手順とATEM設定用ホスト名/ポート表示。

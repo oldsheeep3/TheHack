@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Switcher.Contracts;
@@ -31,7 +30,7 @@ internal static class WebHostServices
         services.Configure<JsonOptions>(options =>
         {
             options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            ProtocolJsonOptions.AddConverters(options.SerializerOptions);
         });
     }
 }

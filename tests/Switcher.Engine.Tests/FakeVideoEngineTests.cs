@@ -98,12 +98,87 @@ public sealed class FakeVideoEngineTests
         Assert.Equal(OutputSink.Vcam1, engine.CurrentAssignments[0].Sink);
     }
 
-    [Fact]
-    public void ApplyOutputs_HdmiWithoutDisplayId_Throws()
+    [Theory]
+    [InlineData(OutputSink.Hdmi1)]
+    [InlineData(OutputSink.Hdmi3)]
+    public void ApplyOutputs_HdmiWithoutDisplayId_Throws(OutputSink sink)
     {
         var engine = new FakeVideoEngine();
         Assert.Throws<ArgumentException>(() => engine.ApplyOutputs(new OutputsRequest([
-            new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm1, DisplayId: null, HideCursor: true, Fullscreen: true),
+            new OutputAssignment(sink, OutputSource.Pgm1, DisplayId: null, HideCursor: true, Fullscreen: true),
         ])));
+    }
+
+    [Fact]
+    public void ApplyOutputs_AcceptsThreeOfAKind()
+    {
+        var engine = new FakeVideoEngine();
+        engine.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Vcam3, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Ndi3, OutputSource.Pgm2, null, null, null, NdiName: "SWITCHER PGM3"),
+        ]));
+
+        Assert.Equal(4, engine.CurrentAssignments.Count);
+        Assert.Contains(engine.CurrentAssignments, a => a.Sink == OutputSink.Vcam3);
+    }
+
+    [Fact]
+    public void StartDisplayOutput_TracksEachTargetSeparately()
+    {
+        var engine = new FakeVideoEngine();
+
+        // Two HDMI projectors are open at once - they are addressed by sink token, not by the bus they
+        // carry, so both stay attached even though both show PGM1.
+        engine.StartDisplayOutput("HDMI1", new IntPtr(1), displayId: 0);
+        engine.StartDisplayOutput("HDMI2", new IntPtr(2), displayId: 1);
+
+        Assert.Equal(new[] { "HDMI1", "HDMI2" }, engine.DisplayTargets.Order());
+        var hdmi2 = engine.DisplayFor("HDMI2");
+        Assert.NotNull(hdmi2);
+        Assert.Equal(new IntPtr(2), hdmi2.Value.WindowHandle);
+        Assert.Equal(1, hdmi2.Value.DisplayId);
+
+        engine.StopDisplayOutput("HDMI1");
+        Assert.Equal(new[] { "HDMI2" }, engine.DisplayTargets);
+        Assert.Null(engine.DisplayFor("HDMI1"));
+    }
+
+    [Fact]
+    public void QueryOutputStatus_HdmiRunsOnlyWhileItsProjectorIsAttached()
+    {
+        var engine = new FakeVideoEngine();
+        engine.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Hdmi1, OutputSource.Pgm2, DisplayId: 0, HideCursor: true, Fullscreen: true),
+            new OutputAssignment(OutputSink.Hdmi2, OutputSource.Pgm2, DisplayId: 1, HideCursor: true, Fullscreen: true),
+        ]));
+
+        // Assigned but not presented: an HDMI sink with no window is not egressing, which is the whole
+        // point of asking the engine rather than reading the routing table.
+        Assert.All(engine.QueryOutputStatus().Where(s => s.Sink != OutputSink.Vcam1),
+            s => Assert.False(s.Running));
+
+        engine.StartDisplayOutput("HDMI2", new IntPtr(2), displayId: 1);
+        var status = engine.QueryOutputStatus();
+        Assert.False(status.Single(s => s.Sink == OutputSink.Hdmi1).Running);
+        Assert.True(status.Single(s => s.Sink == OutputSink.Hdmi2).Running);
+        Assert.True(status.Single(s => s.Sink == OutputSink.Vcam1).Running);
+    }
+
+    [Fact]
+    public void QueryOutputStatus_FailingSinkReportsStopped()
+    {
+        var engine = new FakeVideoEngine();
+        engine.FailingSinks.Add(OutputSink.Ndi2);
+        engine.ApplyOutputs(new OutputsRequest([
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Ndi2, OutputSource.Pgm2, null, null, null, NdiName: "SWITCHER PGM2"),
+        ]));
+
+        var status = engine.QueryOutputStatus();
+        Assert.True(status.Single(s => s.Sink == OutputSink.Vcam1).Running);
+        Assert.False(status.Single(s => s.Sink == OutputSink.Ndi2).Running);
     }
 }

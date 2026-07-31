@@ -146,9 +146,14 @@
         <article class="card">
           <span class="tag">Outputs</span>
           <h3>出力</h3>
-          <p>仮想カメラ（Zoom / Teams などへ）、NDI ×2、HDMI 全画面。それぞれ PGM1 / PGM2 のどちらを
-          出すか選べます。<strong>PGM1・PGM2 はそれぞれ最低 1 つの出力が必要</strong>です ──
+          <p>仮想カメラ（Zoom / Teams などへ）、HDMI 全画面、NDI 送出。初期状態は<strong>ウェブカメラ 1 つ＋
+          HDMI 1 つ</strong>で、そこから HDMI と NDI を足せます（<strong>ウェブカメラ 1 つ、
+          HDMI・NDI はそれぞれ最大 3 つ、合計最大 6 つ</strong>）。それぞれ PGM1 / PGM2 のどちらを出すか選べます。
+          <strong>PGM1・PGM2 はそれぞれ最低 1 つの出力が必要</strong>です ──
           どこにも出ていない本線を作らないための決まりです。</p>
+          <p><strong>ウェブカメラ出力は 1 つだけ</strong>です。OBS が用意できる仮想カメラは 1 本しかないので、
+          2 つ目は中身が NDI 送出になり「ウェブカメラ」という名前が実際の出口を偽ってしまいます。
+          それを避けるために 2 つ目は追加できません ── もう 1 系統いるときは NDI 出力を足してください。</p>
         </article>
         <article class="card">
           <span class="tag">Audio</span>

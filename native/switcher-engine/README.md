@@ -138,8 +138,9 @@ CMake sets `SWITCHER_HAS_NDI` when it finds the headers; without them `ndi.cpp` 
   A source's `id` *is* its NDI name (`MACHINE (Source)`), which is what `recv_create_v3` connects by.
 - **Fallback**: `map_source_type("NDI")` prefers `switcher_ndi`, falling back to DistroAV's `ndi_source`
   if this build lacks NDI support and that plugin happens to be installed.
-- **Not yet native**: NDI *output* still goes through DistroAV's `ndi_output` (so the NDI1/NDI2/VCAM2
-  sinks need that plugin). Sending would reuse the tap readback plus `NDIlib_send_send_video_async_v2`.
+- **Not yet native**: NDI *output* still goes through DistroAV's `ndi_output` (so the `NDI1`–`NDI3` sinks,
+  and a legacy `VCAM2`/`VCAM3` on the fallback path, need that plugin). Sending would reuse the tap readback plus
+  `NDIlib_send_send_video_async_v2`.
 
 Verified against NDI 6 Runtime + NDI Tools "Test Patterns" as the sender.
 
@@ -155,9 +156,18 @@ Self-reference is skipped explicitly; libobs rejects deeper cycles itself.
 - **OBS version**: **32.0.4** (Windows) is the host-validated build and the `setup.ps1` fallback, but the
   version is *not* pinned — `ObsRuntime` accepts libobs 30.0–32.99 and `setup.ps1` builds against
   whichever OBS is installed. Import lib must match the runtime `obs.dll`.
-- **Dual virtual camera**: OBS ships a *single* virtual-camera output. **Decision: `VCAM1` → the OBS
-  virtual camera; `VCAM2` → an NDI output** (`ndi_output`, DistroAV) so both program buses egress without
-  a second camera driver. `HDMI` is presented separately via `engine_start_display` (App owns the HWND).
+- **Multiple virtual cameras**: OBS ships a *single* virtual-camera output. **Decision: the operator gets
+  exactly one webcam sink** (`VCAM1` → the OBS virtual camera; `OutputCatalog.MaxWebcamSinks` = 1). A
+  second webcam sink could only be honoured by routing it somewhere that is not a camera, which would
+  make the sink kind lie about where the video goes, so it is not offered. `VCAM2`/`VCAM3` still parse
+  and still fall through to an NDI output (`ndi_output`, DistroAV) named `SWITCHER VCAM2`/`SWITCHER
+  VCAM3` — a compatibility path for tables written by builds that predate the limit, so those keep
+  egressing until the App resets them to the current defaults.
+- **Output table**: sinks are operator-chosen rather than fixed — one `VCAM1`, up to three each of
+  `HDMI<n>` and `NDI<n>`, six in total (`Switcher.Contracts.OutputCatalog`). `HDMI<n>` binds no obs
+  output: it is presented via `engine_start_display("HDMI<n>", hwnd, display)` with the App owning the
+  HWND, and `resolve_target_source` maps that token to whichever bus the sink carries so two HDMI sinks
+  on one bus still get independent displays.
 - **Bundled module set**: `win-dshow` (webcam→`dshow_input`), `obs-ffmpeg` (SRT/media→`ffmpeg_source`,
   `srt://` URLs), `image-source` (IMAGE→`image_source`), `obs-browser` (HTML→`browser_source`),
   `text` (`text_gdiplus`), and DistroAV (NDI, optional). Paths per the *Runtime configuration* table

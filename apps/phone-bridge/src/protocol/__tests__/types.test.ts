@@ -2,12 +2,19 @@ import { describe, expect, it } from 'vitest'
 import {
   isMultiviewCell,
   isMultiviewConfig,
+  isOutputSink,
   isSourceDefinition,
   isSourceProtocol,
   isSourceStatus,
   isSourceType,
   isTallyState,
   isWsEnvelope,
+  MAX_OUTPUTS,
+  MAX_SINKS_PER_KIND,
+  MAX_WEBCAM_OUTPUTS,
+  maxOutputsOf,
+  OUTPUT_KINDS,
+  OUTPUT_SINKS,
   type ConfigChangeRequest,
   type ModulesConfig,
   type MultiviewConfig,
@@ -214,16 +221,38 @@ describe('MultiviewConfig (PUT /api/v1/multiview, §4.2)', () => {
 })
 
 describe('OutputsConfig (PUT /api/v1/outputs, §4.2)', () => {
-  it('round-trips the spec example, including the HDMI-only fields', () => {
+  it('round-trips the spec example, including the HDMI-only and NDI-only fields', () => {
     const config: OutputsConfig = {
       outputs: [
         { sink: 'VCAM1', source: 'PGM1' },
-        { sink: 'VCAM2', source: 'PGM2' },
-        { sink: 'HDMI', source: 'PGM1', display_id: 1, hide_cursor: true, fullscreen: true },
+        { sink: 'HDMI1', source: 'PGM1', display_id: 1, hide_cursor: true, fullscreen: true },
+        { sink: 'HDMI2', source: 'PGM2', display_id: 2, hide_cursor: true, fullscreen: true },
+        { sink: 'NDI3', source: 'PGM2', ndi_name: 'SWITCHER PGM3' },
       ],
     }
 
     expect(JSON.parse(JSON.stringify(config))).toEqual(config)
+  })
+
+  it('isOutputSink accepts every ordinal token and rejects the ordinal-less legacy ones', () => {
+    // Nine tokens, which is not nine addable sinks: VCAM2/VCAM3 stay parseable only so tables written
+    // by builds that predate the one-webcam limit still load.
+    expect(OUTPUT_SINKS).toHaveLength(9)
+    for (const sink of OUTPUT_SINKS) {
+      expect(isOutputSink(sink)).toBe(true)
+    }
+    expect(isOutputSink('HDMI')).toBe(false)
+    expect(isOutputSink('VCAM')).toBe(false)
+    expect(isOutputSink('HDMI4')).toBe(false)
+  })
+
+  it('maxOutputsOf caps webcams at one and every other kind at three', () => {
+    expect(maxOutputsOf('WEBCAM')).toBe(MAX_WEBCAM_OUTPUTS)
+    expect(maxOutputsOf('WEBCAM')).toBe(1)
+    expect(maxOutputsOf('HDMI')).toBe(MAX_SINKS_PER_KIND)
+    expect(maxOutputsOf('NDI')).toBe(MAX_SINKS_PER_KIND)
+    // The per-kind ceilings add up to more than one table may hold, so MAX_OUTPUTS still binds.
+    expect(OUTPUT_KINDS.reduce((total, kind) => total + maxOutputsOf(kind), 0)).toBeGreaterThan(MAX_OUTPUTS)
   })
 })
 

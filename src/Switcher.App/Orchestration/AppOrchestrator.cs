@@ -115,12 +115,20 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     {
         var outputs = _runtimeConfig.OutputAssignments;
 
-        // A table saved before every-bus-needs-an-output was enforced can leave PGM2 with nowhere to go.
-        // Coming up on the defaults is better than coming up with a dead program bus, and the operator
-        // can re-route from the Outputs dock either way.
+        // A table saved before every-bus-needs-an-output was enforced can leave PGM2 with nowhere to go,
+        // and a hand-edited config can hold more sinks than the catalog allows. Coming up on the defaults
+        // is better than coming up with a dead program bus or a table the engine will reject wholesale,
+        // and the operator can re-route from the Outputs dock either way.
+        var problems = new List<string>(OutputRules.DescribeOverLimit(outputs));
         if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(outputs)) is { } missing)
         {
-            _logger.LogWarning("{Problem} Falling back to the default output routing.", missing);
+            problems.Add(missing);
+        }
+
+        if (problems.Count > 0)
+        {
+            _logger.LogWarning(
+                "{Problem} Falling back to the default output routing.", string.Join(" ", problems));
             outputs = OutputDefaults.Default;
             lock (_stateLock)
             {
@@ -456,7 +464,13 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         ArgumentNullException.ThrowIfNull(request);
 
         // Guarded here as well as in the Web validator, because the operator window applies outputs
-        // directly and must not be able to leave a program bus going nowhere.
+        // directly and must not be able to leave a program bus going nowhere - or, since the table
+        // became operator-editable, to exceed the per-kind/total ceilings the catalog defines.
+        if (OutputRules.DescribeOverLimit(request.Outputs) is { Count: > 0 } overLimit)
+        {
+            throw new ArgumentException(string.Join(" ", overLimit), nameof(request));
+        }
+
         if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(request.Outputs)) is { } missing)
         {
             throw new ArgumentException(missing, nameof(request));
