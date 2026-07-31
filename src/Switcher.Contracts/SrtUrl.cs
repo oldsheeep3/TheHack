@@ -54,4 +54,11 @@ public static class SrtUrl
 
         return $"{authority}?{query}";
     }
+
+    /// <summary>
+    /// The URL the *sender* dials to reach this PC: one of this PC's own addresses plus the port the
+    /// Listener binds. Which address is right is the operator's call whenever the PC is on more than one
+    /// network, so this takes the host rather than assuming the first candidate.
+    /// </summary>
+    public static string ForSender(string host, int port) => $"srt://{host}:{port}";
 }

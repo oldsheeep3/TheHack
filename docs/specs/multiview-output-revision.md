@@ -108,6 +108,7 @@
   - `DeviceInfo[]` を返す（`id`, `name`, 任意で `formats`/`resolutions`）。NDI SDK/キャプチャ未検出時は空配列＋導線メッセージ。
 - **SRT セットアップ情報（新規）** `GET /api/v1/srt/setup`:
   - `SrtSetupInfo` を返す（`listener_port`, `host_candidates`(LAN IPv4[]), 推奨URL文字列, `latency` 目安, 手順テキスト）。
+  - `host_candidates` は**推奨順**（既定ゲートウェイあり → 物理NIC → その他、APIPA(169.254.x)は最後尾）。仮想スイッチ/VPN のアドレスも除外せず列挙する: 推奨は当て推量にすぎず、送出側（ATEM）から到達できるアドレスの最終判断はオペレーターが行うため。推奨URL＝先頭候補。UI（ATEM 設定 §3 / ソース追加 SRT）は候補を選択可能なコンボボックスで提示し、URL 欄は手入力も許す。
 
 ### 4.2 バリデーション
 - `OutputsRequestValidator`: 各 sink は最大1回。HDMI は `display_id` 必須（既存）。**NDI1/NDI2 のとき `source` は PGM1/PGM2 のみ**、`ndi_name` 空文字不可（未指定は既定名で補完）。

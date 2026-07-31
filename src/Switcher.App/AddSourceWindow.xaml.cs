@@ -43,9 +43,14 @@ public partial class AddSourceWindow : Window
     private readonly ILogger _logger;
     private readonly ObservableCollection<DeviceInfo> _devices = [];
     private readonly ObservableCollection<SrtSenderOption> _srtSenders = [];
+    private readonly ObservableCollection<string> _srtHosts = [];
 
     private SrtSetupInfo? _lastSrtSetup;
     private bool _uiReady;
+
+    /// <summary>Set once the host list is filled, so seeding the picker does not count as a pick and
+    /// overwrite an address the operator typed by hand.</summary>
+    private bool _srtHostsReady;
 
     public AddSourceWindow(IDeviceQueryService deviceQueryService, AppOrchestrator orchestrator, ILogger logger)
     {
@@ -60,6 +65,7 @@ public partial class AddSourceWindow : Window
         _logger = logger;
 
         SrtAtemCombo.ItemsSource = _srtSenders;
+        SrtHostCombo.ItemsSource = _srtHosts;
         DeviceCombo.ItemsSource = _devices;
         WebcamFormatCombo.ItemsSource = WebcamCaptureModes.Select(m => m.Label).ToList();
         WebcamFormatCombo.SelectedIndex = 0;
@@ -157,12 +163,22 @@ public partial class AddSourceWindow : Window
 
         _lastSrtSetup = info;
         SrtSetupText.Text = info.InstructionsText;
-        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
-        SrtHostsList.ItemsSource = info.HostCandidates;
         SrtLatencyBox.Text = info.RecommendedLatencyMs.ToString(CultureInfo.InvariantCulture);
-        SrtAtemText.Text =
-            $"On the sender, stream to {info.RecommendedUrl} in Caller mode. " +
-            "Picking an ATEM above sets this side up for that automatically.";
+
+        // Every address this PC answers on, best guess first. A PC with a VPN, a Hyper-V switch or a
+        // second NIC has several and only the one on the sender's network works, so the guess has to stay
+        // changeable rather than being the only address on offer.
+        _srtHostsReady = false;
+        _srtHosts.Clear();
+        foreach (var host in info.HostCandidates)
+        {
+            _srtHosts.Add(host);
+        }
+
+        SrtHostCombo.SelectedIndex = _srtHosts.Count > 0 ? 0 : -1;
+        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
+        _srtHostsReady = true;
+        UpdateSenderHint();
 
         // The picker may have been used before the setup lookup came back, in which case the URL it
         // filled in was a guess at the default port; redo it now that the real port is known.
@@ -171,6 +187,31 @@ public partial class AddSourceWindow : Window
             ApplyAtemPreset();
         }
     }
+
+    private void OnSrtHostChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_srtHostsReady || SrtHostCombo.SelectedItem is not string host)
+        {
+            return;
+        }
+
+        var port = _lastSrtSetup?.ListenerPort ?? ProtocolConstants.SrtListenPort;
+        SrtRecommendedUrlBox.Text = SrtUrl.ForSender(host, port);
+        UpdateSenderHint();
+    }
+
+    /// <summary>The address the sender should dial: whatever is in the box, which starts as the
+    /// recommendation and follows the host picker until the operator types over it.</summary>
+    private string SenderUrl()
+    {
+        var typed = SrtRecommendedUrlBox.Text.Trim();
+        return typed.Length > 0 ? typed : _lastSrtSetup?.RecommendedUrl ?? string.Empty;
+    }
+
+    private void UpdateSenderHint() =>
+        SrtAtemText.Text =
+            $"On the sender, stream to {SenderUrl()} in Caller mode. " +
+            "Picking an ATEM above sets this side up for that automatically.";
 
     // ── SRT: the ATEM as the sender ─────────────────────────────────────────────
 
@@ -295,7 +336,10 @@ public partial class AddSourceWindow : Window
 
     private async void OnConfigureAtemStreamingClick(object sender, RoutedEventArgs e)
     {
-        if (_lastSrtSetup is not { } setup)
+        // The address the ATEM is given is the one showing in the box - the operator may have picked a
+        // different NIC of this PC, or typed an address the scan cannot know.
+        var url = SenderUrl();
+        if (url.Length == 0)
         {
             SrtAtemStatusText.Text = "Still working out this PC's address — try again in a moment.";
             return;
@@ -305,11 +349,11 @@ public partial class AddSourceWindow : Window
         try
         {
             var applied = await _orchestrator
-                .ConfigureAtemStreamingAsync(new AtemStreamingRequest(setup.RecommendedUrl))
+                .ConfigureAtemStreamingAsync(new AtemStreamingRequest(url))
                 .ConfigureAwait(true);
 
             SrtAtemStatusText.Text = applied
-                ? $"Told the ATEM to stream to {setup.RecommendedUrl}. Add the source, then check the ATEM went on air."
+                ? $"Told the ATEM to stream to {url}. Add the source, then check the ATEM went on air."
                 : "No ATEM is connected — select one in the ATEM window first.";
         }
         catch (Exception ex)

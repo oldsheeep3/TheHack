@@ -35,8 +35,15 @@ public partial class AtemSettingsWindow : Window
 
     private readonly ObservableCollection<AtemDeviceInfo> _devices = [];
     private readonly ObservableCollection<AtemAssignmentRowViewModel> _assignments = [];
+    private readonly ObservableCollection<string> _streamHosts = [];
 
     private string? _selectedDeviceName;
+
+    /// <summary>Set once the host list is filled, so seeding the picker does not count as a pick and
+    /// overwrite a URL the operator typed by hand.</summary>
+    private bool _streamHostsReady;
+
+    private int _srtListenerPort = ProtocolConstants.SrtListenPort;
 
     public AtemSettingsWindow(
         AppOrchestrator orchestrator,
@@ -60,6 +67,7 @@ public partial class AtemSettingsWindow : Window
 
         DevicesList.ItemsSource = _devices;
         AssignmentsControl.ItemsSource = _assignments;
+        StreamHostCombo.ItemsSource = _streamHosts;
 
         var current = orchestrator.CurrentAtemConfig;
 
@@ -213,18 +221,47 @@ public partial class AtemSettingsWindow : Window
 
     // ── section 3: ON AIR back into this PC ─────────────────────────────────────
 
+    /// <summary>
+    /// Fills the address picker with every address this PC answers on, recommended one first, and shows
+    /// the URL that goes with it. A PC with a VPN, a Hyper-V switch or a second NIC has several, and only
+    /// the one on the ATEM's own network works — so the guess is a starting point, not the only choice.
+    /// </summary>
     private async Task LoadStreamUrlAsync()
     {
+        SrtSetupInfo setup;
         try
         {
-            var setup = await _deviceQueryService.GetSrtSetupAsync().ConfigureAwait(true);
-            StreamUrlBox.Text = setup.RecommendedUrl;
+            setup = await _deviceQueryService.GetSrtSetupAsync().ConfigureAwait(true);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "SRT setup lookup failed.");
             StreamUrlBox.Text = string.Empty;
+            return;
         }
+
+        _srtListenerPort = setup.ListenerPort > 0 ? setup.ListenerPort : ProtocolConstants.SrtListenPort;
+
+        _streamHostsReady = false;
+        _streamHosts.Clear();
+        foreach (var host in setup.HostCandidates)
+        {
+            _streamHosts.Add(host);
+        }
+
+        StreamHostCombo.SelectedIndex = _streamHosts.Count > 0 ? 0 : -1;
+        StreamUrlBox.Text = setup.RecommendedUrl;
+        _streamHostsReady = true;
+    }
+
+    private void OnStreamHostChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!_streamHostsReady || StreamHostCombo.SelectedItem is not string host)
+        {
+            return;
+        }
+
+        StreamUrlBox.Text = SrtUrl.ForSender(host, _srtListenerPort);
     }
 
     private async void OnConfigureStreamingClick(object sender, RoutedEventArgs e)
