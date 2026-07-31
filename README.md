@@ -66,11 +66,79 @@ PC上に常駐する制御アプリを「脳」とし、複数プロトコル（
 └── HybridSwitcher.sln         # .NET ソリューション
 ```
 
+## セットアップ（clone 直後に一度）
+
+```sh
+./setup.sh          # 共通（.NET / phone-bridge / firmware）
+```
+
+```powershell
+.\setup.ps1         # Windows で映像エンジンまで動かす場合（追加で実行）
+```
+
+clone しただけの状態では、次の理由で初回ビルドが必ず落ちる。`setup.sh` がこれを一括で潰す。
+
+| 落ちる理由 | `setup.sh` の対応 |
+| --- | --- |
+| `dotnet` / `node` が `~/.bashrc` 経由でしか PATH に乗らない（非ログインシェル・CI では不在） | `DOTNET_ROOT` と nvm を解決して検証。`--install-missing` で .NET SDK を `~/.dotnet` に導入 |
+| `firmware/switcher-module/ch32v003fun` サブモジュールが未初期化 | `git submodule update --init --recursive` |
+| `scripts` → `.claude/scripts` のリンク切れ（`.claude` は gitignore） | `.claude` を取得してリンクを復旧（失敗しても警告のみ。ビルドには不要） |
+| NuGet / npm の依存が未取得 | `dotnet restore` と `npm ci`（CI と同じ lock 厳守） |
+
+主なオプション（何度実行しても同じ結果になる）:
+
+| オプション | 用途 |
+| --- | --- |
+| `--check` | 検証のみ。取得も生成もせず状態を報告する |
+| `--ci` | 対話なし。`.env` を作らず、サブモジュールと `.claude` を触らない |
+| `--install-missing` | .NET SDK が無ければ `dotnet-install.sh` で導入する |
+| `--skip-submodules` / `--skip-restore` / `--skip-npm` / `--skip-agent-scripts` | 個別スキップ |
+
+未解決の問題が残ると終了コード 1 で終わるので、CI からそのまま呼べる（`./setup.sh --ci`）。
+
+### Windows でネイティブ映像エンジンまで用意する（`setup.ps1`）
+
+Visual Studio で F5 したときの `DllNotFoundException` / `0x8007007E` は、ネイティブの `switcher-engine.dll` が未ビルドなことが原因。この DLL は `.sln` 外の CMake ビルドで、さらにその手前に libobs の import lib **`obs.lib`** が要る。`obs.lib` は **OBS のインストーラには含まれず**、OBS 本体をソースからビルドしないと手に入らない。
+
+`setup.ps1` はその依存の連鎖を通しで面倒を見る。
+
+```text
+インストール済み OBS を検出 → 同じ版の obs-studio を clone
+  → libobs だけビルド → obs.lib
+    → .env に LIBOBS_* を記録
+      → build.bat → switcher-engine.dll
+        → Switcher.App.csproj が App 出力へ自動コピー（既存の仕組み）
+```
+
+| オプション | 用途 |
+| --- | --- |
+| `-Check` | 検証のみ。clone もビルドも `.env` の書き換えもしない |
+| `-ObsVersion <version>` | 使う OBS の版を明示する |
+| `-Force` | `obs-studio\` を作り直す（版を切り替えるとき） |
+| `-Bundle` | `tools/bundle-obs-runtime.ps1` を呼び、App 出力に `obs-runtime\` を同梱する |
+| `-SkipLibobs` / `-SkipEngine` | 個別スキップ |
+
+> **初回は数十分かかる**（obs-studio の clone が数 GB、libobs のビルドがその後）。2 回目以降は済んだ工程を飛ばす。
+
+**バージョンは固定していない。** マネージド側（`ObsRuntime.cs`）は libobs **30.0〜32.99** を受け入れ、範囲外でも警告を出すだけで拒否しない。`setup.ps1` もそれに合わせ、**インストール済み OBS の版を検出してその版のソースをビルドする**。OBS が入っていない場合だけ既定の **32.0.4**（実機検証済み）を使う。
+
+> ⚠️ `obs.lib`（ビルド時）と `obs.dll`（実行時）の版が食い違うと起動失敗・クラッシュする。バージョンを検出に任せるのはこの事故を避けるため。手動で `-ObsVersion` を指定してインストール済みの版と食い違う場合は警告が出る。
+
+**エンドユーザーは OBS のインストールが不要。** `ObsRuntime.Locate()` は実行ファイルの隣の `obs-runtime\` を最優先で見る（`ObsRuntime.cs:83-90`）ので、`-Bundle` で同梱した配布物は自己完結する。OBS インストールが要るのは**ビルドする側**だけ。
+
+> **GPL**: `obs-runtime\` を同梱した配布物は GPL-2.0 になる。[`LICENSE`](LICENSE) / [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 参照。
+
+### 環境変数（`.env`）
+
+ツールチェーン関連の変数は [`.env.example`](.env.example) をひな形に `.env` へ書く（`setup.sh` が無ければ自動生成する）。`.env` は gitignore 済み。既に export 済みの環境変数が `.env` より優先されるので、CI の `env:` / secrets が上書きされることはない。
+
+> ⚠️ `.env` に書けるのは**ビルド/ツールチェーンの変数だけ**。アプリの動作設定（`AtemIp` / `WebPort` / `ProjectorDisplayIndex` 等）は `src/Switcher.App/appsettings.json` を `System.Text.Json` が直接読む実装で、環境変数は見ない（`Configuration/AppConfigLoader.cs`）。
+
 ## ビルド & テスト
 
 ### PC常駐アプリ（.NET 9）
 
-> このリポジトリでは `dotnet` は PATH 上に無く SDK は `~/.dotnet` にある。以下を前置きする。
+> `./setup.sh` 済みでも、`dotnet` が PATH に乗るのは setup.sh の中だけ。呼び出し元のシェルには以下を前置きする。
 
 ```sh
 export DOTNET_ROOT=$HOME/.dotnet PATH=$HOME/.dotnet:$PATH
@@ -88,13 +156,16 @@ dotnet test  HybridSwitcher.sln     # 全ユニットテスト
 `switcher-engine.dll`（`native/switcher-engine/`）は **Windows + OBS 専用**で `.sln` 外。以下が検証済みの順序
 （詳細は [switcher-engine README](native/switcher-engine/README.md) / [L-002 タスク](docs/tasks/agent-L-002-native-libobs-engine.md)）。
 
-**前提**: Windows / Visual Studio 2022（「C++によるデスクトップ開発」）/ CMake ≥ 3.24 / インストール済み OBS（例: 31.0.3）。
+> 以下は手順の内訳。**通常は [`setup.ps1`](#windows-でネイティブ映像エンジンまで用意するsetupps1) が 1〜2 を自動でやる**ので、手で追う必要があるのは仕組みを確認したいときだけ。
+
+**前提**: Windows / Visual Studio 2022（「C++によるデスクトップ開発」）/ CMake ≥ 3.24 / インストール済み OBS（版は問わない。libobs 30.0〜32.99 が対象）。
 以下はすべて **「x64 Native Tools Command Prompt for VS 2022」** から実行する（`cmake`/`cl` に PATH が通る。通常の cmd/PowerShell 不可）。
 
 1. **libobs dev files を用意**（採用 OBS と**同一版**のソースをビルド。インストール済み OBS アプリだけではヘッダ/`obs.lib` が無い）
    ```bat
    git clone --recursive https://github.com/obsproject/obs-studio.git
-   cd obs-studio && git checkout 31.0.3 && git submodule update --init --recursive
+   rem <version> はインストール済み OBS に合わせる（obs.dll のファイルバージョン）。
+   cd obs-studio && git checkout <version> && git submodule update --init --recursive
    cmake --preset windows-x64
    cmake --build build_x64 --config Release --target libobs
    ```

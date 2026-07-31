@@ -13,8 +13,12 @@
 
 ## Prerequisites (pinned)
 
-- **OBS Studio**: **`31.0.3`** (Windows). libobs ABI is not guaranteed stable across majors, so this
-  version is fixed and **must match the runtime OBS install** (import lib ↔ `obs.dll`).
+- **OBS Studio**: any release in the **libobs 30.0–32.99** range (Windows) — the range `ObsRuntime`
+  accepts (`MinimumTested`/`MaximumTested`). **32.0.4** is the host-validated version and the default
+  `setup.ps1` falls back to when no OBS is installed. There is no single pinned version: build against
+  whichever OBS is installed, because the import lib **must match the runtime `obs.dll`** (a mismatch
+  surfaces as a startup failure or a crash). `setup.ps1` detects the installed version and builds that
+  tag of obs-studio for exactly this reason.
 - CMake ≥ 3.24, a C++17 compiler (MSVC on Windows).
 - libobs dev files. The validated path (see the L-002 notes in
   [`docs/tasks/agent-L-002-native-libobs-engine.md`](../../docs/tasks/agent-L-002-native-libobs-engine.md))
@@ -44,7 +48,9 @@ cmake --build build --config Release
 The output `switcher-engine.dll` must sit next to `Switcher.App.exe` (or on the DLL search path) so
 `DllImport("switcher-engine")` resolves (`Switcher.App.csproj` copies it automatically after a native
 build). At runtime `obs.dll`, its `data/` folder, the plugin modules, and `libobs-d3d11.dll` must all be
-reachable — the simplest way is to put an installed OBS `bin\64bit` (matching version 31.0.3) on `PATH`.
+reachable — the simplest way is to put an installed OBS `bin\64bit` (the same version the import lib was
+built against) on `PATH`. `ObsRuntime.AddDllSearchDirectory` also does this at startup for a direct
+`.exe` launch, so in practice no `PATH` setup is needed once the engine locates an OBS root.
 
 ## Runtime configuration (paths & startup)
 
@@ -146,7 +152,9 @@ Layers are looked up in the same pool, so a source can be inside a mix and on a 
 Self-reference is skipped explicitly; libobs rejects deeper cycles itself.
 
 ### Resolved technical items (spec §9)
-- **Pinned OBS version**: **32.0.4** (Windows), validated. Import lib must match the runtime `obs.dll`.
+- **OBS version**: **32.0.4** (Windows) is the host-validated build and the `setup.ps1` fallback, but the
+  version is *not* pinned — `ObsRuntime` accepts libobs 30.0–32.99 and `setup.ps1` builds against
+  whichever OBS is installed. Import lib must match the runtime `obs.dll`.
 - **Dual virtual camera**: OBS ships a *single* virtual-camera output. **Decision: `VCAM1` → the OBS
   virtual camera; `VCAM2` → an NDI output** (`ndi_output`, DistroAV) so both program buses egress without
   a second camera driver. `HDMI` is presented separately via `engine_start_display` (App owns the HWND).

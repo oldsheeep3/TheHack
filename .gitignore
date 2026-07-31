@@ -6,6 +6,10 @@
 # （追跡していない状態で gitlink だけが index に残ると actions/checkout が exit 128 で落ちる）。
 /.claude/
 
+# ローカルの環境変数。setup.sh が .env.example から生成する。ひな形（.env.example）
+# だけを追跡し、実値の入った .env はコミットしない。
+/.env
+
 # .NET build artifacts
 [Bb]in/
 [Oo]bj/
