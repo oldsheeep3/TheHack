@@ -161,7 +161,12 @@ public partial class AddSourceWindow : Window
     {
         if (_lastSrtSetup is { } setup)
         {
-            SrtUrlBox.Text = setup.RecommendedUrl;
+            // RecommendedUrl is the address the *sender* dials (this PC's LAN IP). Pasting it here in
+            // Listener mode would put the PC in caller mode against its own IP, which connects to
+            // nothing; what this side needs is the matching bind URL.
+            SrtUrlBox.Text = SrtListenerModeSelected()
+                ? SrtUrl.ForMode($"srt://0.0.0.0:{setup.ListenerPort}", listener: true)
+                : setup.RecommendedUrl;
         }
     }
 
@@ -243,15 +248,21 @@ public partial class AddSourceWindow : Window
 
     private SourceDefinition? BuildSrtDefinition(string id, string name)
     {
+        var listener = SrtListenerModeSelected();
         var url = SrtUrlBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(url))
+
+        // A Listener has nothing to dial, so an empty box is a complete answer: it binds the default
+        // port. A Caller does need a target address.
+        if (string.IsNullOrWhiteSpace(url) && !listener)
         {
             return null;
         }
 
         var latency = int.TryParse(SrtLatencyBox.Text, out var parsed) ? parsed : DeviceQueryDefaultLatencyMs;
-        return new SourceDefinition(id, name, SourceType.Srt, null, null, new SrtConfig(url, latency));
+        return new SourceDefinition(id, name, SourceType.Srt, null, null, new SrtConfig(SrtUrl.ForMode(url, listener), latency));
     }
+
+    private bool SrtListenerModeSelected() => SrtModeCombo.SelectedIndex != 1;   // 0 = Listener, 1 = Caller
 
     private SourceDefinition? BuildImageDefinition(string id, string name)
     {

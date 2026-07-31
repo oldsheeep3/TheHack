@@ -203,13 +203,23 @@ obs_data_t *build_native_settings(const std::string &obs_source_id, const char *
         }
     } else if (obs_source_id == "ffmpeg_source") {
         const char *url = in ? obs_data_get_string(in, "url") : "";
-        if (url && *url) obs_data_set_string(out, "input", url);
+        std::string input = (url && *url) ? url : "";
+        const long long latency_ms = in ? obs_data_get_int(in, "latency_ms") : 0;
+
+        // SrtConfig.latency_ms can only reach libsrt through the URL query: ffmpeg_source has no latency
+        // setting of its own. FFmpeg's srt protocol takes `latency` in MICROseconds, so the operator's
+        // 20-50 ms (multiview-output-revision.md §2.7) becomes 20000-50000 here. Previously the value was
+        // read and dropped, leaving libsrt's 120 ms default in place. An explicit latency= already in the
+        // URL is the operator's own choice and is left alone.
+        if (latency_ms > 0 && input.rfind("srt://", 0) == 0 && input.find("latency=") == std::string::npos) {
+            input += (input.find('?') == std::string::npos) ? '?' : '&';
+            input += "latency=" + std::to_string(latency_ms * 1000);
+        }
+
+        if (!input.empty()) obs_data_set_string(out, "input", input.c_str());
         obs_data_set_bool(out, "is_local_file", false);
         obs_data_set_bool(out, "restart_on_activate", false);
-        if (in) {
-            long long latency = obs_data_get_int(in, "latency_ms");
-            if (latency > 0) obs_data_set_int(out, "reconnect_delay_sec", 1);
-        }
+        if (latency_ms > 0) obs_data_set_int(out, "reconnect_delay_sec", 1);
     } else if (obs_source_id == "ndi_source" || obs_source_id == "switcher_ndi") {
         // NdiConfig.source_name is the full NDI name ("MACHINE (Source)"), which is what both our own
         // receiver and DistroAV connect by; the two plugins just spell the setting key differently.

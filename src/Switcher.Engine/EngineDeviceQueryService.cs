@@ -30,8 +30,10 @@ public sealed class EngineDeviceQueryService : IDeviceQueryService
         var hosts = LocalIPv4Candidates();
         var recommended = hosts.Count > 0 ? $"srt://{hosts[0]}:{port}" : $"srt://<this-pc-ip>:{port}";
         var instructions =
-            "Set the ATEM Mini's SRT streaming output to Caller with the URL above (latency 20-50ms). " +
-            "This PC listens as SRT Listener on the port shown.";
+            "Set the sender (ATEM Mini / OBS) to SRT Caller with the URL above (latency 20-50ms). " +
+            $"This PC receives as SRT Listener, which binds srt://0.0.0.0:{port}?mode=listener - that bind " +
+            "URL, not the one above, is what the SRT source itself opens. Allow inbound UDP " +
+            $"{port} in Windows Firewall or the sender cannot connect.";
         return Task.FromResult(new SrtSetupInfo(port, hosts, recommended, 40, instructions));
     }
 
