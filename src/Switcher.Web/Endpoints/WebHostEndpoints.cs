@@ -24,7 +24,10 @@ internal static class WebHostEndpoints
         endpoints.MapGet("/api/v1/audio/devices", AudioEndpoint.GetDevices);
         endpoints.MapPut("/api/v1/audio/outputs", AudioEndpoint.PutOutputsAsync);
         endpoints.MapPut("/api/v1/modules", ModulesEndpoint.PutAsync);
+        endpoints.MapGet("/api/v1/atem", AtemEndpoint.GetConfigAsync);
         endpoints.MapPut("/api/v1/atem", AtemEndpoint.PutConfigAsync);
+        endpoints.MapGet("/api/v1/atem/discover", AtemEndpoint.GetDevicesAsync);
+        endpoints.MapPost("/api/v1/atem/streaming", AtemEndpoint.PostStreamingAsync);
         endpoints.MapPost("/api/v1/atem/command", AtemEndpoint.PostCommandAsync);
         endpoints.MapPut("/api/v1/pico/network", PicoNetworkEndpoint.PutAsync);
 

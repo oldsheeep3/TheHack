@@ -2,6 +2,7 @@ using System.IO;
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
 using Switcher.Atem;
+using Switcher.Atem.Discovery;
 using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Hid.Backlight;
@@ -31,12 +32,16 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     // Switcher.Atem.ButtonCommandMapping's lookup-by-ButtonEvent API, which has no other way to
     // target a specific mapping entry (docs/tasks/agent-A2-006-app-integration-v2.md: "Web DTO ->
     // 既存 AtemCommandMapping/ButtonCommandMapping への変換をApp側で行う").
+    /// <summary>Action token meaning "this switch stays a local source toggle"; see RebuildAtemMappingLocked.</summary>
+    public const string NoAtemAction = "None";
+
     private const string HidRelayControllerId = "__hid__";
     private const string DirectCommandControllerId = "__direct__";
     private const int DirectCommandButtonId = 0;
 
     private readonly IVideoEngine _engine;
     private readonly AtemController _atemController;
+    private readonly AtemDiscoveryService _atemDiscovery;
     private readonly ITallyBroadcaster _tallyBroadcaster;
     private readonly HidBacklightService _hidBacklightService;
     private BacklightCalculator _backlightCalculator = new();
@@ -84,10 +89,12 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         HidBacklightService hidBacklightService,
         RuntimeConfigStore runtimeConfigStore,
         AppConfig config,
-        ILogger<AppOrchestrator> logger)
+        ILogger<AppOrchestrator> logger,
+        AtemDiscoveryService? atemDiscovery = null)
     {
         _engine = engine;
         _atemController = atemController;
+        _atemDiscovery = atemDiscovery ?? new AtemDiscoveryService();
         _tallyBroadcaster = tallyBroadcaster;
         _hidBacklightService = hidBacklightService;
         _runtimeConfigStore = runtimeConfigStore;
@@ -513,22 +520,80 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    /// <summary>The ATEM connection settings and button mappings currently in force.</summary>
+    public AtemConfig CurrentAtemConfig
+    {
+        get { lock (_stateLock) { return _runtimeConfig.AtemConfig; } }
+    }
+
+    /// <summary>Raised after <see cref="ApplyAtemConfigAsync"/> so open UI reflects a change made
+    /// from the other control surface (the settings window vs. the Web API).</summary>
+    public event EventHandler<AtemConfig>? AtemConfigChanged;
+
     public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        bool reconnect;
         lock (_stateLock)
         {
+            // Only redial when the target actually moved. Re-applying the same address on every mapping
+            // edit would tear down a working session and re-run the handshake mid-show.
+            reconnect = config.Enabled
+                && !string.IsNullOrWhiteSpace(config.Ip)
+                && (!string.Equals(config.Ip, _atemController.TargetIp, StringComparison.Ordinal)
+                    || _atemController.State == AtemConnectionState.Disconnected);
+
             SaveRuntimeConfigLocked(_runtimeConfig with { AtemConfig = config });
             RebuildAtemMappingLocked();
 
-            if (config.Enabled && !string.IsNullOrWhiteSpace(config.Ip))
+            if (reconnect)
             {
                 _atemController.Connect(config.Ip);
             }
         }
 
+        AtemConfigChanged?.Invoke(this, config);
         return Task.CompletedTask;
+    }
+
+    public Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentAtemConfig);
+
+    public Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default) =>
+        _atemDiscovery.DiscoverAsync(cancellationToken);
+
+    /// <summary>Checks one address the operator typed in rather than sweeping the whole subnet.</summary>
+    public Task<AtemDeviceInfo?> ProbeAtemDeviceAsync(string ip, CancellationToken cancellationToken = default) =>
+        _atemDiscovery.ProbeAsync(ip, cancellationToken);
+
+    public Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return Task.FromResult(_atemController.TrySendStreamingSetup(request));
+    }
+
+    /// <summary>
+    /// Opens the control connection to whichever ATEM the operator selected, if any. Called once by the
+    /// app host during startup. An ATEM that is not enabled is not dialled: the client would otherwise
+    /// spend the whole session retrying a hello against an address nobody chose.
+    /// </summary>
+    public void ConnectConfiguredAtem()
+    {
+        AtemConfig config;
+        lock (_stateLock)
+        {
+            config = _runtimeConfig.AtemConfig;
+        }
+
+        if (!config.Enabled || string.IsNullOrWhiteSpace(config.Ip))
+        {
+            _logger.LogInformation("No ATEM selected; the remote-control client stays idle.");
+            return;
+        }
+
+        _logger.LogInformation("Connecting ATEM client to {AtemIp}.", config.Ip);
+        _atemController.Connect(config.Ip);
     }
 
     public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)
@@ -995,6 +1060,14 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         foreach (var mapping in _runtimeConfig.AtemConfig.Mappings)
         {
+            // The settings window writes a row per module switch and leaves the unassigned ones blank,
+            // so "no action here" is expected input, not something to warn about.
+            if (string.IsNullOrWhiteSpace(mapping.Action) ||
+                mapping.Action.Equals(NoAtemAction, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             if (TryParseSwitch(mapping.Switch, out var switchId) &&
                 Enum.TryParse<AtemAction>(mapping.Action, ignoreCase: true, out var action))
             {

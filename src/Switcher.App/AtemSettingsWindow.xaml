@@ -1,0 +1,113 @@
+<Window x:Class="Switcher.App.AtemSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ATEM" Height="660" Width="620"
+        Background="{DynamicResource Surface}" Foreground="{DynamicResource Text}"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        MinHeight="480" MinWidth="520">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
+            <DockPanel>
+                <TextBlock Text="ATEM" Style="{StaticResource DockTitle}" />
+                <TextBlock x:Name="ConnectionStateText" HorizontalAlignment="Right"
+                           Style="{StaticResource ChipText}" Text="NOT CONNECTED" />
+            </DockPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceRaised}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="12,10">
+            <DockPanel>
+                <TextBlock x:Name="StatusText" Style="{StaticResource MonoText}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Close" Click="OnCloseClick" MinWidth="90" />
+                    <Button Content="Apply" Click="OnApplyClick" Style="{StaticResource ToolButtonAccent}"
+                            MinWidth="110" Margin="0" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14">
+            <StackPanel>
+                <!-- ── 1. which switcher ───────────────────────────────────────── -->
+                <TextBlock Text="1. Which ATEM?" FontWeight="SemiBold" FontSize="13" />
+                <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,2,0,6"
+                           Text="Scan knocks on every address of this PC's networks and lists whatever answers as an ATEM. If the switcher is on another subnet, type its address instead." />
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button x:Name="ScanButton" Content="Scan network" Click="OnScanClick" />
+                    <TextBlock x:Name="ScanStatusText" Style="{StaticResource MonoText}"
+                               VerticalAlignment="Center" Margin="8,0,0,0" />
+                </StackPanel>
+
+                <ListBox x:Name="DevicesList" Height="110" SelectionChanged="OnDeviceSelected"
+                         Background="{DynamicResource Canvas}" Foreground="{DynamicResource Text}"
+                         BorderBrush="{DynamicResource Line}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <DockPanel>
+                                <TextBlock Text="{Binding Ip}" DockPanel.Dock="Right" Margin="12,0,0,0"
+                                           Style="{StaticResource MonoText}" />
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12" />
+                            </DockPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock x:Name="NoDevicesText" Style="{StaticResource MonoText}" TextWrapping="Wrap"
+                           Visibility="Collapsed"
+                           Text="Nothing answered. Check that the ATEM is powered on, wired to this network, and that ATEM Software Control is not holding the only control session." />
+
+                <TextBlock Text="Address" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                <DockPanel>
+                    <Button Content="Test" Click="OnTestClick" DockPanel.Dock="Right" MinWidth="70" Margin="6,0,0,0" />
+                    <TextBox x:Name="IpBox" ToolTip="e.g. 192.168.10.240" Margin="0" />
+                </DockPanel>
+                <CheckBox x:Name="EnabledCheck" Content="Connect to this ATEM" Margin="0,8,0,0" />
+
+                <!-- ── 2. controller assignments ────────────────────────────────── -->
+                <TextBlock Text="2. What should the controller do?" FontWeight="SemiBold" FontSize="13"
+                           Margin="0,16,0,0" />
+                <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,2,0,6"
+                           Text="Give a module switch an ATEM action and pressing it drives the ATEM instead of mounting its own source. Leave a switch on None to keep it switching sources on this PC." />
+
+                <ItemsControl x:Name="AssignmentsControl">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource ListRow}" Padding="8,6" Margin="0,0,0,4">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Label}" FontWeight="SemiBold" FontSize="12" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <ComboBox ItemsSource="{Binding Actions}" SelectedItem="{Binding Action, Mode=TwoWay}"
+                                                  Width="130" Margin="0,0,6,0" />
+                                        <ComboBox ItemsSource="{Binding MixEffects}" SelectedItem="{Binding MixEffect, Mode=TwoWay}"
+                                                  Width="86" Margin="0,0,6,0"
+                                                  Visibility="{Binding IsAssigned, Converter={StaticResource BoolToVisibility}}" />
+                                        <StackPanel Orientation="Horizontal"
+                                                    Visibility="{Binding TakesSource, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="INPUT" Style="{StaticResource MicroLabel}"
+                                                       VerticalAlignment="Center" Margin="0,0,4,0" />
+                                            <TextBox Text="{Binding Source, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     Width="52" Margin="0" ToolTip="ATEM input number" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- ── 3. ON AIR back into this PC ──────────────────────────────── -->
+                <TextBlock Text="3. Bring the ATEM's ON AIR output back in" FontWeight="SemiBold" FontSize="13"
+                           Margin="0,16,0,0" />
+                <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,2,0,6"
+                           Text="Add an SRT source and pick this ATEM there, and this PC waits for its program feed on the address below. Enter that address in the ATEM's streaming settings — or let the button try to set it for you." />
+                <TextBox x:Name="StreamUrlBox" IsReadOnly="True" />
+                <Button x:Name="ConfigureStreamButton" Content="Configure the ATEM's streaming output"
+                        Click="OnConfigureStreamingClick" Margin="0,6,0,0" HorizontalAlignment="Stretch" />
+                <TextBlock Style="{StaticResource MonoText}" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Foreground="{DynamicResource TextFaint}"
+                           Text="The streaming commands are reverse-engineered and untested against hardware here, so this stays a button rather than something that happens on its own. If the ATEM ignores it, set the URL by hand in ATEM Software Control — nothing else is affected." />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

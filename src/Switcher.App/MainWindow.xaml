@@ -59,6 +59,8 @@
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
                     <Button Content="+ Add source" Click="OnOpenAddSourceClick" Style="{StaticResource ToolButtonAccent}" />
                     <Button Content="New mix..." Click="OnNewMixClick" ToolTip="Combine several sources into one" />
+                    <Button Content="ATEM..." Click="OnOpenAtemSettingsClick"
+                            ToolTip="Pick an ATEM, assign its PGM/PVW to the controller, bring its ON AIR output back in" />
                     <Button Content="Multiview settings" Click="OnOpenMultiviewSettingsClick" />
                     <Button Content="Multiview full-screen" Click="OnMultiviewFullscreenClick" />
                     <Button Content="Open projector" Click="OnOpenProjectorClick" />
