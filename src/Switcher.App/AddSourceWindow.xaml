@@ -46,7 +46,22 @@
                 </StackPanel>
 
                 <StackPanel x:Name="SrtPanel" Visibility="Collapsed">
-                    <TextBlock Text="3. SRT connection" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <!-- An ATEM's PGM arriving over SRT is the common case this dialog is opened for
+                         (docs/specs/00-system-overview.md §4.4 "ATEM の二役"), so it gets the top slot
+                         and fills the rest of the form in rather than leaving the operator to derive a
+                         listener URL by hand. -->
+                    <TextBlock Text="3. Where from?" Style="{StaticResource MonoText}" Margin="0,6,0,0" />
+                    <ComboBox x:Name="SrtAtemCombo" SelectionChanged="OnSrtAtemChanged" DisplayMemberPath="Label" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button x:Name="SrtScanAtemButton" Content="Scan for ATEMs" Click="OnScanAtemsClick" />
+                        <Button x:Name="SrtConfigureAtemButton" Content="Point the ATEM here"
+                                Click="OnConfigureAtemStreamingClick" IsEnabled="False"
+                                ToolTip="Try to set the ATEM's streaming output to the address below" />
+                    </StackPanel>
+                    <TextBlock x:Name="SrtAtemStatusText" Style="{StaticResource MonoText}" TextWrapping="Wrap"
+                               Margin="0,4,0,0" />
+
+                    <TextBlock Text="SRT connection" Style="{StaticResource MonoText}" Margin="0,8,0,0" />
                     <ComboBox x:Name="SrtModeCombo" SelectedIndex="0">
                         <ComboBoxItem Content="Listener" />
                         <ComboBoxItem Content="Caller" />

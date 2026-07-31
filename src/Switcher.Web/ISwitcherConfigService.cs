@@ -30,6 +30,15 @@ public interface ISwitcherConfigService
 
     Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default);
 
+    /// <summary>The ATEM connection settings and button mappings currently in force.</summary>
+    Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Sweeps the local network for ATEM switchers the operator can pick from.</summary>
+    Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Points the connected ATEM's streaming output at a URL. False when nothing is connected.</summary>
+    Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default);
+
     Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default);
 
     Task ApplyPicoNetworkConfigAsync(PicoNetworkConfig config, CancellationToken cancellationToken = default);

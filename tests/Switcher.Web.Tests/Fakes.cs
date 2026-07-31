@@ -15,7 +15,17 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     public List<AudioOutputsRequest> AppliedAudioOutputs { get; } = [];
     public List<AtemConfig> AppliedAtemConfigs { get; } = [];
     public List<AtemCommandRequest> SentAtemCommands { get; } = [];
+    public List<AtemStreamingRequest> AtemStreamingRequests { get; } = [];
     public List<PicoNetworkConfig> AppliedPicoNetworkConfigs { get; } = [];
+
+    /// <summary>What GET /api/v1/atem reports back.</summary>
+    public AtemConfig CurrentAtemConfig { get; set; } = new(Enabled: false, Ip: string.Empty, Mappings: []);
+
+    /// <summary>What a discovery sweep is pretending to have found.</summary>
+    public List<AtemDeviceInfo> DiscoverableAtems { get; } = [];
+
+    /// <summary>Whether <see cref="ConfigureAtemStreamingAsync"/> reports a connected switcher.</summary>
+    public bool AtemStreamingSucceeds { get; set; } = true;
 
     public Task ApplyConfigAsync(ConfigChangeRequest request, CancellationToken cancellationToken = default)
     {
@@ -75,6 +85,18 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     {
         AppliedAtemConfigs.Add(config);
         return Task.CompletedTask;
+    }
+
+    public Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentAtemConfig);
+
+    public Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AtemDeviceInfo>>(DiscoverableAtems);
+
+    public Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default)
+    {
+        AtemStreamingRequests.Add(request);
+        return Task.FromResult(AtemStreamingSucceeds);
     }
 
     public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)

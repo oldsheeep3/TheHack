@@ -41,6 +41,7 @@ public sealed class AtemController : IAtemController, IDisposable
     private ushort _sessionId;
     private ushort _nextPacketId = 1;
     private string? _targetIp;
+    private string? _productName;
     private CancellationTokenSource? _handshakeCts;
     private int _droppedCommandCount;
     private bool _disposed;
@@ -61,9 +62,24 @@ public sealed class AtemController : IAtemController, IDisposable
     /// <summary>Raised whenever the connection lifecycle transitions to a new state.</summary>
     public event EventHandler<AtemConnectionState>? ConnectionStateChanged;
 
+    /// <summary>Raised once the connected switcher reports its model name in its post-handshake dump.</summary>
+    public event EventHandler<string>? ProductNameChanged;
+
     public AtemConnectionState State
     {
         get { lock (_sync) { return _state; } }
+    }
+
+    /// <summary>Address most recently passed to <see cref="Connect"/>, or null if never connected.</summary>
+    public string? TargetIp
+    {
+        get { lock (_sync) { return _targetIp; } }
+    }
+
+    /// <summary>Model name of the connected switcher ("ATEM Mini Pro"), once it has said so.</summary>
+    public string? ProductName
+    {
+        get { lock (_sync) { return _productName; } }
     }
 
     /// <summary>Number of <see cref="SendCommand"/> calls dropped while not connected.</summary>
@@ -91,6 +107,7 @@ public sealed class AtemController : IAtemController, IDisposable
             _handshakeCts = cts;
             _sessionId = 0;
             _nextPacketId = 1;
+            _productName = null;
             changed = TrySetStateLocked(AtemConnectionState.Connecting);
         }
 
@@ -143,6 +160,84 @@ public sealed class AtemController : IAtemController, IDisposable
         SendPacket(BuildCommandPacket(mapping, sessionId, packetId));
     }
 
+    /// <summary>
+    /// Points the switcher's streaming output at <paramref name="request"/>'s URL and, when asked, puts
+    /// it on air — the "let the ATEM dial this PC's SRT listener itself" path
+    /// (docs/specs/pc-switcher-app.md §2.8). Returns false when no switcher is connected.
+    /// <para>
+    /// The two command layouts this sends (<c>CRSS</c>/<c>StrR</c>) are reverse-engineered and not
+    /// verified against hardware in this repo, which is why nothing calls this implicitly: it runs only
+    /// when the operator presses the button for it. A switcher that disagrees about the layout ignores
+    /// the block, so the failure mode is "the ATEM did not start streaming", not a disturbed session.
+    /// </para>
+    /// </summary>
+    public bool TrySendStreamingSetup(AtemStreamingRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!TryReservePacket(out var sessionId, out var packetId))
+        {
+            _logger.LogWarning("Cannot configure ATEM streaming: no switcher is connected.");
+            return false;
+        }
+
+        SendPacket(BuildBlockPacket(
+            AtemCommandNames.SetStreamingService,
+            AtemCommandSerializer.BuildStreamingServicePayload(request.ServiceName, request.Url, request.StreamKey),
+            sessionId,
+            packetId));
+
+        _logger.LogInformation("Sent ATEM streaming destination {Url}.", request.Url);
+
+        if (!request.Start)
+        {
+            return true;
+        }
+
+        if (!TryReservePacket(out sessionId, out packetId))
+        {
+            return false;
+        }
+
+        SendPacket(BuildBlockPacket(
+            AtemCommandNames.SetStreamingState,
+            AtemCommandSerializer.BuildStreamingStatePayload(streaming: true),
+            sessionId,
+            packetId));
+
+        _logger.LogInformation("Asked the ATEM to start streaming.");
+        return true;
+    }
+
+    /// <summary>
+    /// Takes the next outgoing packet id, but only while connected. Returns false (reserving nothing)
+    /// when there is no session, so callers drop rather than burn sequence numbers off air.
+    /// </summary>
+    private bool TryReservePacket(out ushort sessionId, out ushort packetId)
+    {
+        lock (_sync)
+        {
+            if (_state != AtemConnectionState.Connected)
+            {
+                sessionId = 0;
+                packetId = 0;
+                return false;
+            }
+
+            sessionId = _sessionId;
+            packetId = _nextPacketId;
+            _nextPacketId = (ushort)((_nextPacketId + 1) % 0x8000);
+            return true;
+        }
+    }
+
+    private static byte[] BuildBlockPacket(string commandName, ReadOnlySpan<byte> payload, ushort sessionId, ushort packetId)
+    {
+        var block = AtemCommandSerializer.BuildCommandBlock(commandName, payload);
+        var header = new AtemPacketHeader(AtemPacketFlags.AckRequest, 0, sessionId, 0, 0, packetId);
+        return AtemCommandSerializer.BuildPacket(header, block);
+    }
+
     private static byte[] BuildCommandPacket(AtemCommandMapping mapping, ushort sessionId, ushort packetId)
     {
         var (name, payload) = mapping.Action switch
@@ -154,9 +249,7 @@ public sealed class AtemController : IAtemController, IDisposable
             _ => throw new ArgumentOutOfRangeException(nameof(mapping), mapping.Action, "Unsupported ATEM action."),
         };
 
-        var block = AtemCommandSerializer.BuildCommandBlock(name, payload);
-        var header = new AtemPacketHeader(AtemPacketFlags.AckRequest, 0, sessionId, 0, 0, packetId);
-        return AtemCommandSerializer.BuildPacket(header, block);
+        return BuildBlockPacket(name, payload, sessionId, packetId);
     }
 
     private async Task HandshakeLoopAsync(CancellationToken cancellationToken, string ip)
@@ -190,11 +283,38 @@ public sealed class AtemController : IAtemController, IDisposable
 
     private void OnPacketReceived(object? sender, byte[] data)
     {
-        if (!AtemPacketHeader.TryParse(data, out var header) || !header.Flags.HasFlag(AtemPacketFlags.NewSessionId))
+        if (!AtemPacketHeader.TryParse(data, out var header))
         {
             return;
         }
 
+        if (header.Flags.HasFlag(AtemPacketFlags.NewSessionId))
+        {
+            CompleteHandshake(header);
+        }
+        else if (header.Flags.HasFlag(AtemPacketFlags.AckRequest))
+        {
+            // A state packet from the switcher. It retransmits anything we leave unacknowledged and
+            // eventually drops the session, so acking is what keeps a long show's connection alive.
+            ushort sessionId;
+            bool connected;
+            lock (_sync)
+            {
+                sessionId = _sessionId;
+                connected = _state == AtemConnectionState.Connected;
+            }
+
+            if (connected)
+            {
+                SendAck(sessionId, header.PacketId);
+            }
+        }
+
+        ReadDeviceIdentity(data);
+    }
+
+    private void CompleteHandshake(AtemPacketHeader header)
+    {
         ushort sessionId;
         ushort ackFor;
         bool changed;
@@ -213,6 +333,35 @@ public sealed class AtemController : IAtemController, IDisposable
         }
 
         SendAck(sessionId, ackFor);
+    }
+
+    /// <summary>Picks the model name out of the switcher's state dump so the UI can name what it is
+    /// talking to instead of showing a bare IP.</summary>
+    private void ReadDeviceIdentity(byte[] data)
+    {
+        foreach (var (name, payload) in AtemCommandReader.ReadPacket(data))
+        {
+            if (name != AtemCommandNames.ProductIdentifier ||
+                AtemCommandReader.ReadProductIdentifier(payload) is not { } product)
+            {
+                continue;
+            }
+
+            bool changed;
+            lock (_sync)
+            {
+                changed = !string.Equals(_productName, product, StringComparison.Ordinal);
+                _productName = product;
+            }
+
+            if (changed)
+            {
+                _logger.LogInformation("Connected ATEM identifies itself as {ProductName}.", product);
+                ProductNameChanged?.Invoke(this, product);
+            }
+
+            return;
+        }
     }
 
     private void SendAck(ushort sessionId, ushort ackedPacketId)

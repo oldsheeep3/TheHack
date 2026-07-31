@@ -65,6 +65,7 @@ public partial class MainWindow : Window
     private MultiviewSettingsWindow? _multiviewSettings;
     private MixSourceWindow? _mixEditor;
     private AddSourceWindow? _addSourceWindow;
+    private AtemSettingsWindow? _atemSettings;
     private int _operatorDisplayIndex;
     private bool _uiReady;
 
@@ -130,6 +131,7 @@ public partial class MainWindow : Window
         _engine.SourceStatusChanged += OnSourceStatusChanged;
         _engine.SourceRemoved += OnSourceRemoved;
         _atemController.ConnectionStateChanged += OnAtemConnectionStateChanged;
+        _atemController.ProductNameChanged += OnAtemProductNameChanged;
         _orchestrator.TallyChangedV2 += OnTallyChangedV2;
         _orchestrator.MultiviewChanged += OnMultiviewChanged;
         _orchestrator.ModulesChanged += OnModulesChanged;
@@ -137,7 +139,7 @@ public partial class MainWindow : Window
         _framePump.Tick += OnFramePumpTick;
 
         TallyPalette.Apply(_orchestrator.CurrentTallyColors);
-        AtemStateText.Text = $"ATEM {_atemController.State}";
+        RefreshAtemChip();
 
         SelectOperatorDisplay();
         ApplyStageViewMode(_config.StageViewMode);
@@ -153,6 +155,7 @@ public partial class MainWindow : Window
             _engine.SourceStatusChanged -= OnSourceStatusChanged;
             _engine.SourceRemoved -= OnSourceRemoved;
             _atemController.ConnectionStateChanged -= OnAtemConnectionStateChanged;
+            _atemController.ProductNameChanged -= OnAtemProductNameChanged;
             _orchestrator.TallyChangedV2 -= OnTallyChangedV2;
             _orchestrator.MultiviewChanged -= OnMultiviewChanged;
             _orchestrator.ModulesChanged -= OnModulesChanged;
@@ -268,7 +271,17 @@ public partial class MainWindow : Window
         });
 
     private void OnAtemConnectionStateChanged(object? sender, AtemConnectionState state) =>
-        Dispatcher.BeginInvoke(() => AtemStateText.Text = $"ATEM {state}");
+        Dispatcher.BeginInvoke(RefreshAtemChip);
+
+    private void OnAtemProductNameChanged(object? sender, string productName) =>
+        Dispatcher.BeginInvoke(RefreshAtemChip);
+
+    /// <summary>Names the switcher once it has identified itself, so the chip says which ATEM is on the
+    /// other end rather than just that something is.</summary>
+    private void RefreshAtemChip() =>
+        AtemStateText.Text = _atemController.ProductName is { } product
+            ? $"{product} {_atemController.State}"
+            : $"ATEM {_atemController.State}";
 
     private void OnTallyChangedV2(object? sender, TallyStateV2 state) =>
         Dispatcher.BeginInvoke(() =>
@@ -811,6 +824,29 @@ public partial class MainWindow : Window
         return result == MessageBoxResult.OK;
     }
 
+    // ── ATEM ────────────────────────────────────────────────────────────────────
+
+    /// <summary>Opens the ATEM setup window (pick a switcher, assign its PGM/PVW to module switches,
+    /// route its ON AIR output back in). Modeless like the multiview editor: an operator setting the
+    /// ATEM up wants to watch the program monitors react while doing it.</summary>
+    private void OnOpenAtemSettingsClick(object sender, RoutedEventArgs e)
+    {
+        if (_atemSettings is { } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var window = new AtemSettingsWindow(_orchestrator, _atemController, _deviceQueryService, _config, _logger)
+        {
+            Owner = this,
+        };
+
+        window.Closed += (_, _) => _atemSettings = null;
+        _atemSettings = window;
+        window.Show();
+    }
+
     // ── add source ──────────────────────────────────────────────────────────────
 
     /// <summary>Opens the modal add-source dialog (both the toolbar's "+ Add source" and the Sources
@@ -824,7 +860,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var window = new AddSourceWindow(_deviceQueryService, _config, _logger) { Owner = this };
+        var window = new AddSourceWindow(_deviceQueryService, _orchestrator, _logger) { Owner = this };
         _addSourceWindow = window;
         try
         {
