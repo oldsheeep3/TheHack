@@ -141,7 +141,7 @@ public class WebApiV2Tests
         var request = new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm1, 1, true, true),
+            new OutputAssignment(OutputSink.Hdmi1, OutputSource.Pgm2, 1, true, true),
         ]);
         var response = await client.PutAsJsonAsync("/api/v1/outputs", request, ProtocolJsonOptions.Default);
 
@@ -156,7 +156,31 @@ public class WebApiV2Tests
         using var host = await TestWebHostFactory.CreateAsync(configService, new FakeInputSourceManager([]), new RecordingControllerInputSink());
         using var client = host.GetTestClient();
 
-        var request = new OutputsRequest([new OutputAssignment(OutputSink.Hdmi, OutputSource.Pgm1, null, null, null)]);
+        var request = new OutputsRequest([new OutputAssignment(OutputSink.Hdmi1, OutputSource.Pgm1, null, null, null)]);
+        var response = await client.PutAsJsonAsync("/api/v1/outputs", request, ProtocolJsonOptions.Default);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(configService.AppliedOutputs);
+    }
+
+    [Fact]
+    public async Task PutOutputs_WithSevenSinks_ReturnsBadRequest()
+    {
+        // The App stops offering "add output" at six, so a seventh can only arrive over the API.
+        var configService = new FakeSwitcherConfigService();
+        using var host = await TestWebHostFactory.CreateAsync(configService, new FakeInputSourceManager([]), new RecordingControllerInputSink());
+        using var client = host.GetTestClient();
+
+        var request = new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Vcam3, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Hdmi1, OutputSource.Pgm2, 0, true, true),
+            new OutputAssignment(OutputSink.Hdmi2, OutputSource.Pgm1, 1, true, true),
+            new OutputAssignment(OutputSink.Hdmi3, OutputSource.Pgm2, 2, true, true),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null),
+        ]);
         var response = await client.PutAsJsonAsync("/api/v1/outputs", request, ProtocolJsonOptions.Default);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

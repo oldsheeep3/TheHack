@@ -3,20 +3,22 @@ import type { JSX } from 'react'
 import { ConfigTab } from './config/ConfigTab'
 import { ConnectionTab } from './net/ConnectionTab'
 
-type Tab = 'operate' | 'settings'
+type Tab = 'connection' | 'settings'
 
+// This client is settings-only: it configures the PC, it does not run the show. TAKE and tally live on
+// the PC console and the module panel, which is where an operator's hands already are.
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'operate', label: '操作/接続モード' },
-  { id: 'settings', label: '設定モード' },
+  { id: 'connection', label: '接続先' },
+  { id: 'settings', label: '設定' },
 ]
 
 function App(): JSX.Element {
-  const [activeTab, setActiveTab] = useState<Tab>('operate')
+  const [activeTab, setActiveTab] = useState<Tab>('connection')
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-0 text-text-primary">
       <header className="border-b border-border px-4 py-3">
-        <h1 className="text-lg font-semibold">Phone Bridge</h1>
+        <h1 className="text-lg font-semibold">Switcher 設定</h1>
       </header>
 
       <nav className="flex border-b border-border" role="tablist" aria-label="モード切替">
@@ -39,7 +41,7 @@ function App(): JSX.Element {
       </nav>
 
       <main className="flex-1 p-4" role="tabpanel">
-        {activeTab === 'operate' ? <ConnectionTab /> : <ConfigTab />}
+        {activeTab === 'connection' ? <ConnectionTab /> : <ConfigTab />}
       </main>
     </div>
   )

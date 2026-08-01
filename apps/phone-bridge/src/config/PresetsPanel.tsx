@@ -1,24 +1,31 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
-import type { MultiviewCell, PgmBus, ProgramLayer } from '../protocol/types'
+import type { MultiviewGrid, MultiviewRegion, PgmBus, ProgramLayer } from '../protocol/types'
 import type { PresetStore, ScenePreset } from './presets'
 import { Section } from './ui'
 
 interface PresetsPanelProps {
   presetStore: PresetStore
   programs: Record<PgmBus, ProgramLayer[]>
-  multiview: MultiviewCell[]
+  multiviewGrid: MultiviewGrid
+  multiviewRegions: MultiviewRegion[]
   onLoad: (preset: ScenePreset) => void
 }
 
-export function PresetsPanel({ presetStore, programs, multiview, onLoad }: PresetsPanelProps): JSX.Element {
+export function PresetsPanel({
+  presetStore,
+  programs,
+  multiviewGrid,
+  multiviewRegions,
+  onLoad,
+}: PresetsPanelProps): JSX.Element {
   const [presetNames, setPresetNames] = useState<string[]>(() => presetStore.list())
   const [newPresetName, setNewPresetName] = useState('')
 
   const handleSave = (): void => {
     const name = newPresetName.trim()
     if (!name) return
-    presetStore.save({ name, programs, multiview })
+    presetStore.save({ name, programs, multiviewGrid, multiviewRegions })
     setPresetNames(presetStore.list())
     setNewPresetName('')
   }

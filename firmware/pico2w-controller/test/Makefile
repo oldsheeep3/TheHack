@@ -6,7 +6,7 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I../include -I../src
 
-TESTS := test_config test_config_sub test_state_agg test_backlight test_settings test_wireless_codec
+TESTS := test_config test_config_sub test_module_bus test_state_agg test_backlight test_settings test_wireless_codec test_fake_modules
 
 .PHONY: all test clean
 all: test
@@ -24,6 +24,11 @@ test_config: test_config.c ../src/config.c
 # (#if は enum ではなく #define 定数で判定する必要があることの回帰テスト)。
 test_config_sub: test_config_sub.c ../src/config.c
 	$(CC) $(CFLAGS) -DCONTROLLER_ROLE=CONTROLLER_ROLE_SUB -o $@ $^
+
+# module_bus.c (バス定義 + ピン→I2Cコントローラの純粋変換) を対象にする。実際のI2C初期化/
+# ピン切替を行う i2c_modules.c はハードウェアI2C依存のためホストテスト対象外。
+test_module_bus: test_module_bus.c ../src/module_bus.c
+	$(CC) $(CFLAGS) -o $@ $^
 
 # state_agg.c (I2C/USB非依存の純粋関数) のみを対象にする。i2c_modules.c/usb_hid.cは
 # ハードウェアI2C/TinyUSB依存のためホストテスト対象外。
@@ -45,6 +50,12 @@ test_settings: test_settings.c ../src/settings_codec.c ../src/config.c
 # backlight_codec.c)もリンクする。wireless.c(CYW43/lwIP依存のI/O部)はホストテスト対象外。
 test_wireless_codec: test_wireless_codec.c ../src/wireless_codec.c ../src/state_agg.c ../src/backlight_codec.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+# fake_modules_codec.c (デバッグ用fake層の純粋部) のみを対象にする。i2c_modules_fake.c
+# (状態保持+HIDエコー送出)はTinyUSB依存のためホストテスト対象外。デバッグ用レポートの
+# 定数(config.h)は FAKE_MODULES ビルドでのみ定義されるため -DFAKE_MODULES を付ける。
+test_fake_modules: test_fake_modules.c ../src/fake_modules_codec.c
+	$(CC) $(CFLAGS) -DFAKE_MODULES -o $@ $^
 
 clean:
 	rm -f $(TESTS)

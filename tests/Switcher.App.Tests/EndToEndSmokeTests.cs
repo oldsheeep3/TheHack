@@ -27,14 +27,15 @@ public sealed class EndToEndSmokeTests
 
         // Tally was broadcast as part of the TAKE above.
         Assert.NotEmpty(harness.TallyBroadcaster.PublishedV2);
-        harness.SourceManager.TryResolveChannel("cam-1", out var channel);
+        harness.Engine.TryResolveChannel("cam-1", out var channel);
         Assert.Contains(channel, harness.TallyBroadcaster.LastV2!.ActivePgm1);
 
-        // Output assignment: route PGM1 to VCAM1 (already the default) and PGM2 to VCAM2.
+        // Output assignment: route PGM1 to VCAM1 (already the default) and PGM2 to NDI1 - the single OBS
+        // virtual camera means the second bus cannot have a webcam sink of its own.
         await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm2, null, null, null),
         ]));
 
         // Module mapping binds module 0's Src1 switch to cam-1 on PGM2's preview.
@@ -43,12 +44,13 @@ public sealed class EndToEndSmokeTests
             new ModuleMapping(0, new ModuleSourceBinding("cam-1", "Assignable"), new ModuleSourceBinding(null, "Assignable")),
         ]));
 
-        // Fake HID input: switch reflection (mount onto PGM2 preview) and a VR nudge.
+        // Fake HID input: switch reflection (loads cam-1 straight onto the PGM2 program bus, per
+        // docs/specs/00-system-overview.md §3) and a VR nudge.
         harness.Orchestrator.HandleSwitchEdge(new SwitchEdgeEvent(0, SwitchId.Pgm2Src1, IsRising: true));
         harness.Orchestrator.HandleVrChanged(new VrChangedEvent(0, VrChannel.Src1, 128));
 
         var finalTally = harness.TallyBroadcaster.LastV2!;
-        Assert.Contains(channel, finalTally.ActivePvw2);
+        Assert.Contains(channel, finalTally.ActivePgm2);
 
         // Backlight send was attempted (best-effort; HidBacklightService.Send throws
         // InvalidOperationException without Start(), which AppOrchestrator must swallow rather than

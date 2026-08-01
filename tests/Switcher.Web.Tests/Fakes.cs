@@ -12,15 +12,41 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     public List<MultiviewLayout> AppliedMultiviews { get; } = [];
     public List<OutputsRequest> AppliedOutputs { get; } = [];
     public List<ModulesRequest> AppliedModules { get; } = [];
+    public List<AudioOutputsRequest> AppliedAudioOutputs { get; } = [];
     public List<AtemConfig> AppliedAtemConfigs { get; } = [];
     public List<AtemCommandRequest> SentAtemCommands { get; } = [];
+    public List<AtemStreamingRequest> AtemStreamingRequests { get; } = [];
     public List<PicoNetworkConfig> AppliedPicoNetworkConfigs { get; } = [];
+
+    /// <summary>What GET /api/v1/atem reports back.</summary>
+    public AtemConfig CurrentAtemConfig { get; set; } = new(Enabled: false, Ip: string.Empty, Mappings: []);
+
+    /// <summary>What the read-back endpoints report as the configuration currently in force.</summary>
+    public List<SourceDefinition> CurrentSourceDefinitions { get; } = [];
+
+    public MultiviewLayout CurrentMultiviewLayout { get; set; } =
+        new([.. Enumerable.Repeat("EMPTY", 16)]);
+
+    public List<OutputAssignment> CurrentOutputs { get; } = [.. OutputDefaults.Default];
+
+    public List<AudioOutputAssignment> CurrentAudioOutputs { get; } = [];
+
+    public List<ModuleMapping> CurrentModules { get; } = [];
+
+    /// <summary>What a discovery sweep is pretending to have found.</summary>
+    public List<AtemDeviceInfo> DiscoverableAtems { get; } = [];
+
+    /// <summary>Whether <see cref="ConfigureAtemStreamingAsync"/> reports a connected switcher.</summary>
+    public bool AtemStreamingSucceeds { get; set; } = true;
 
     public Task ApplyConfigAsync(ConfigChangeRequest request, CancellationToken cancellationToken = default)
     {
         Received.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<SourceDefinition>> GetSourceDefinitionsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SourceDefinition>>(CurrentSourceDefinitions);
 
     public Task AddSourceAsync(SourceDefinition source, CancellationToken cancellationToken = default)
     {
@@ -52,11 +78,26 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<MultiviewLayout> GetMultiviewLayoutAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentMultiviewLayout);
+
     public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
     {
         AppliedOutputs.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<OutputsRequest> GetOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new OutputsRequest(CurrentOutputs));
+
+    public Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default)
+    {
+        AppliedAudioOutputs.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task<AudioOutputsRequest> GetAudioOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AudioOutputsRequest(CurrentAudioOutputs));
 
     public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
     {
@@ -64,10 +105,25 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<ModulesRequest> GetModulesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ModulesRequest(CurrentModules));
+
     public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
     {
         AppliedAtemConfigs.Add(config);
         return Task.CompletedTask;
+    }
+
+    public Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentAtemConfig);
+
+    public Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AtemDeviceInfo>>(DiscoverableAtems);
+
+    public Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default)
+    {
+        AtemStreamingRequests.Add(request);
+        return Task.FromResult(AtemStreamingSucceeds);
     }
 
     public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)
@@ -83,22 +139,79 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     }
 }
 
-internal sealed class FakeInputSourceManager : IInputSourceManager
+/// <summary>
+/// Minimal <see cref="IVideoEngine"/> test double for the Web layer: only <see cref="GetSources"/> is
+/// exercised by the endpoints (GET /api/v1/sources), so the compositing/output surface is a no-op. Named
+/// for its historical role; the Web layer depends on the engine abstraction since the libobs migration.
+/// </summary>
+internal sealed class FakeInputSourceManager : IVideoEngine
 {
     private readonly List<SourceInfo> _sources;
 
     public FakeInputSourceManager(IEnumerable<SourceInfo> sources) => _sources = [.. sources];
 
+    public Task StartAsync(EngineOptions options, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     public IReadOnlyList<SourceInfo> GetSources() => _sources;
+
+    public IReadOnlyList<DeviceInfo> QueryDevices(DeviceQueryType type) => [];
+
+    public void AddSource(SourceDefinition source) =>
+        _sources.Add(new SourceInfo(_sources.Count, source.Name, SourceProtocol.Uvc, null, SourceStatus.Connected, source.Id, _sources.Count));
 
     public void AddSource(int channel, SourceProtocol protocol, string? sourceUrl) =>
         _sources.Add(new SourceInfo(channel, $"ch{channel}", protocol, null, SourceStatus.Connected));
 
-    public void RemoveSource(int channel) => _sources.RemoveAll(s => s.Channel == channel);
+    public void RemoveSource(string id)
+    {
+        _sources.RemoveAll(s => s.Id == id);
+        SourceRemoved?.Invoke(this, id);
+    }
+
+    public event EventHandler<string>? SourceRemoved;
+
+    public bool TryResolveChannel(string id, out int channel)
+    {
+        var match = _sources.FirstOrDefault(s => s.Id == id);
+        channel = match?.Channel ?? -1;
+        return match is not null;
+    }
 
     public event EventHandler<SourceInfo>? SourceStatusChanged;
 
     public void RaiseStatusChanged(SourceInfo info) => SourceStatusChanged?.Invoke(this, info);
+
+    public void SetSourceEnabled(ProgramBus bus, string sourceId, bool enabled) { }
+
+    public void ApplyProgram(ProgramRequest request) { }
+
+    public void ApplyPipSettings(int channel, PipSettings settings) { }
+
+    public void Take() { }
+
+    public void Take(ProgramBus bus, int durationMs) { }
+
+    public FrameData GetFrame(string target) => new(0, 0, ReadOnlyMemory<byte>.Empty);
+
+    public void ApplyMultiview(MultiviewLayout layout) { }
+
+    public void SetSourceAudioMixers(string id, int mixerMask) { }
+
+    public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => [];
+
+    public void ApplyAudioOutputs(AudioOutputsRequest request) { }
+
+    public void ApplyOutputs(OutputsRequest request) { }
+
+    public IReadOnlyList<OutputAssignment> CurrentAssignments => [];
+
+    public IReadOnlyList<OutputStatus> QueryOutputStatus() => [];
+
+    public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId) { }
+
+    public void StopDisplayOutput(string target) { }
 }
 
 /// <summary>

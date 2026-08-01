@@ -1,5 +1,4 @@
 using Switcher.Contracts;
-using Switcher.VirtualCam;
 
 namespace Switcher.App.Configuration;
 
@@ -16,16 +15,38 @@ public sealed record RuntimeConfig(
     AtemConfig AtemConfig,
     PicoNetworkConfig? PicoNetwork,
     MultiviewGrid? MultiviewGrid = null,
-    IReadOnlyList<MultiviewRegion>? MultiviewRegions = null)
+    IReadOnlyList<MultiviewRegion>? MultiviewRegions = null,
+    IReadOnlyList<SourceDefinition>? Sources = null,
+    TallyColors? TallyColors = null,
+    IReadOnlyList<AudioOutputAssignment>? AudioOutputs = null)
 {
     public const int MultiviewCellCount = 16;
+
+    /// <summary>The persisted input sources, replayed onto the engine at startup so a restart restores
+    /// the same inputs (and therefore the same <c>SRC:&lt;id&gt;</c> multiview cells and module
+    /// bindings). Never null once normalized; a config written before this field existed reads as an
+    /// empty list.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<SourceDefinition> SourceList => Sources ?? [];
+
+    /// <summary>Tally colours for the UI and the module LEDs; falls back to the broadcast default for a
+    /// config written before this field existed.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public TallyColors Tally => TallyColors ?? Switcher.Contracts.TallyColors.CreateDefault();
+
+    /// <summary>Bus-to-device audio routing; empty means no audio is being played out.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<AudioOutputAssignment> AudioOutputList => AudioOutputs ?? [];
 
     public static RuntimeConfig CreateDefault() => new(
         ModuleMappings: [],
         MultiviewCells: Enumerable.Repeat("EMPTY", MultiviewCellCount).ToList(),
-        OutputAssignments: OutputRouter.DefaultAssignments,
+        OutputAssignments: OutputDefaults.Default,
         AtemConfig: new AtemConfig(Enabled: false, Ip: string.Empty, Mappings: []),
         PicoNetwork: null,
         MultiviewGrid: null,
-        MultiviewRegions: null);
+        MultiviewRegions: null,
+        Sources: [],
+        TallyColors: Switcher.Contracts.TallyColors.CreateDefault(),
+        AudioOutputs: []);
 }

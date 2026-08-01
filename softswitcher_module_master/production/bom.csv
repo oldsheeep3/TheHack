@@ -1,0 +1,6 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+A1,RaspberryPi_Pico_Common_THT,1,RaspberryPi_Pico,
+J1,PinHeader_2x06_P2.54mm_Vertical,1,Conn_02x06_Odd_Even,
+J3,PinSocket_1x07_P2.54mm_Horizontal,1,Conn_01x07_Socket,
+J4,PinSocket_2x08_P2.54mm_Horizontal,1,Conn_02x08_Odd_Even,
+"R1, R2",R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal,2,5.1k,

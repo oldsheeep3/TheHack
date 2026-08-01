@@ -1,10 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
-using Switcher.App.Services;
 using Switcher.Contracts;
-using Switcher.Media;
-using Switcher.VirtualCam.Display;
 using Forms = System.Windows.Forms;
 
 namespace Switcher.App;
@@ -12,49 +9,37 @@ namespace Switcher.App;
 /// <summary>
 /// Independent multiview full-screen window (requirement 4, docs/specs/multiview-output-revision.md §2.4):
 /// presents the composited multiview onto a chosen display, borderless/top-most with the cursor hidden,
-/// dismissed with <c>Esc</c>. Presentation reuses the exact HDMI stack via
-/// <see cref="IFullscreenPresenterFactory"/> (no duplicated swap-chain/cursor code); this window only
-/// owns the window/monitor placement and pulls a fresh <see cref="CompositorEngine.GetMultiviewFrame"/>
-/// on every <see cref="FramePumpService.Tick"/> so the view stays live while full-screen. Multiview
-/// full-screen is a separate system from <see cref="Switcher.VirtualCam.OutputRouter"/>'s routed sinks.
+/// dismissed with <c>Esc</c>. Since the libobs migration the native engine renders the live multiview
+/// directly into this window's HWND via <see cref="IVideoEngine.StartDisplayOutput"/> (target
+/// <c>MULTIVIEW</c>), so this window only owns the window/monitor placement and applies the current
+/// layout to the engine on attach. This is a separate system from the routed output sinks.
 /// </summary>
 public partial class MultiviewFullscreenWindow : Window
 {
-    private readonly IHdmiFullscreenOutput _presenter;
-    private readonly CompositorEngine _compositor;
-    private readonly FramePumpService _framePump;
+    private const string Target = "MULTIVIEW";
+
+    private readonly IVideoEngine _engine;
     private readonly Func<MultiviewLayout> _layoutProvider;
     private readonly int _displayIndex;
 
     public MultiviewFullscreenWindow(
-        IFullscreenPresenterFactory presenterFactory,
-        CompositorEngine compositor,
-        FramePumpService framePump,
+        IVideoEngine engine,
         Func<MultiviewLayout> layoutProvider,
         int displayIndex)
     {
         InitializeComponent();
 
-        _presenter = presenterFactory.Create();
-        _compositor = compositor;
-        _framePump = framePump;
+        _engine = engine;
         _layoutProvider = layoutProvider;
         _displayIndex = displayIndex;
 
         SourceInitialized += OnSourceInitialized;
         KeyDown += OnKeyDown;
-        _framePump.Tick += OnTick;
-
-        Closed += (_, _) =>
-        {
-            _framePump.Tick -= OnTick;
-            _presenter.Detach();
-            _presenter.Dispose();
-        };
+        Closed += (_, _) => _engine.StopDisplayOutput(Target);
     }
 
-    /// <summary>Positions this window full-screen on the configured display and shows it. The DXGI
-    /// attach happens once the native HWND exists, in <see cref="OnSourceInitialized"/>.</summary>
+    /// <summary>Positions this window full-screen on the configured display and shows it. The native
+    /// display attach happens once the HWND exists, in <see cref="OnSourceInitialized"/>.</summary>
     public void ShowFullscreen()
     {
         var screens = Forms.Screen.AllScreens;
@@ -72,8 +57,9 @@ public partial class MultiviewFullscreenWindow : Window
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
+        _engine.ApplyMultiview(_layoutProvider());
         var hwnd = new WindowInteropHelper(this).Handle;
-        _presenter.Attach(_displayIndex, hwnd, hideCursor: true, fullscreen: true);
+        _engine.StartDisplayOutput(Target, hwnd, _displayIndex);
     }
 
     private void OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -83,23 +69,4 @@ public partial class MultiviewFullscreenWindow : Window
             Close();
         }
     }
-
-    private void OnTick(object? sender, EventArgs e) =>
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (!_presenter.IsAttached)
-            {
-                return;
-            }
-
-            try
-            {
-                _presenter.Present(_compositor.GetMultiviewFrame(_layoutProvider()));
-            }
-            catch (Exception)
-            {
-                // Presentation depends on a Direct3D 11 runtime and the swap chain currently attached;
-                // a transient failure must not tear the window down (it retries next tick).
-            }
-        });
 }

@@ -67,6 +67,33 @@ public sealed class HidInputServiceTests
     }
 
     [Fact]
+    public void ModulePresenceChanged_PublishesFirstBitmapThenOnlyChanges()
+    {
+        var device = new FakeHidDevice();
+        using var service = new HidInputService(device);
+        var bitmaps = new List<byte>();
+        using var received = new ManualResetEventSlim();
+        service.ModulePresenceChanged += mask =>
+        {
+            bitmaps.Add(mask);
+            if (bitmaps.Count == 2)
+            {
+                received.Set();
+            }
+        };
+
+        service.Start();
+        device.EnqueueInput(BuildInputBody(0b0000_0101, SwitchBytes(), seq: 0));  // modules 0 and 2 attached
+        device.EnqueueInput(BuildInputBody(0b0000_0101, SwitchBytes(), seq: 1));  // unchanged: no republish
+        device.EnqueueInput(BuildInputBody(0b0000_1101, SwitchBytes(), seq: 2));  // module 3 attached
+
+        Assert.True(received.Wait(TimeSpan.FromSeconds(5)));
+        service.Stop();
+
+        Assert.Equal([0b0000_0101, 0b0000_1101], bitmaps);
+    }
+
+    [Fact]
     public void Start_RaisesVrChanged_WhenValueMovesPastDeadband()
     {
         var device = new FakeHidDevice();

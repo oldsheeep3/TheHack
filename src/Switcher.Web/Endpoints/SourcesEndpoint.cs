@@ -5,7 +5,18 @@ namespace Switcher.Web.Endpoints;
 
 internal static class SourcesEndpoint
 {
-    public static IResult Get(IInputSourceManager sourceManager) => Results.Ok(sourceManager.GetSources());
+    public static IResult Get(IVideoEngine videoEngine) => Results.Ok(videoEngine.GetSources());
+
+    /// <summary>
+    /// The full <see cref="SourceDefinition"/> list, which <see cref="Get"/> deliberately does not carry.
+    /// A settings client needs the per-type config (NDI name, webcam device, SRT URL, ...) to populate an
+    /// edit form; <c>PUT /api/v1/sources/{id}</c> replaces the whole definition, so without this it could
+    /// only overwrite the fields it never had.
+    /// </summary>
+    public static async Task<IResult> GetDefinitionsAsync(
+        ISwitcherConfigService configService,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await configService.GetSourceDefinitionsAsync(cancellationToken));
 
     public static async Task<IResult> PostAsync(
         SourceDefinition? source,

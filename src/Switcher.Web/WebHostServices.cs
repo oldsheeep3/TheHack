@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Switcher.Contracts;
@@ -15,13 +14,13 @@ internal static class WebHostServices
     public static void Configure(
         IServiceCollection services,
         ISwitcherConfigService configService,
-        IInputSourceManager sourceManager,
+        IVideoEngine videoEngine,
         IControllerInputSink inputSink,
         IDeviceQueryService deviceQueryService)
     {
         services.AddLogging();
         services.AddSingleton(configService);
-        services.AddSingleton(sourceManager);
+        services.AddSingleton(videoEngine);
         services.AddSingleton(inputSink);
         services.AddSingleton(deviceQueryService);
         services.AddSingleton<ControllerInputQueue>();
@@ -31,7 +30,7 @@ internal static class WebHostServices
         services.Configure<JsonOptions>(options =>
         {
             options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            ProtocolJsonOptions.AddConverters(options.SerializerOptions);
         });
     }
 }

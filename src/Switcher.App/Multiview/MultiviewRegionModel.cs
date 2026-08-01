@@ -12,8 +12,14 @@ namespace Switcher.App.Multiview;
 /// </summary>
 public sealed class MultiviewRegionModel
 {
-    public const int Rows = 4;
-    public const int Cols = 4;
+    /// <summary>Smallest and largest grid the operator can choose (4x4 … 6x6). The lower bound keeps
+    /// room for PGM1/PGM2/PVW1/PVW2 plus sources; the upper bound is where 1080p multiview cells stop
+    /// being legible on a monitor wall.</summary>
+    public const int MinSize = 4;
+
+    public const int MaxSize = 6;
+
+    public const int DefaultSize = 4;
 
     public const string Empty = "EMPTY";
 
@@ -21,19 +27,74 @@ public sealed class MultiviewRegionModel
 
     public MultiviewRegionModel() => Reset();
 
+    /// <summary>Grid height in cells, always within <see cref="MinSize"/>..<see cref="MaxSize"/>.</summary>
+    public int Rows { get; private set; } = DefaultSize;
+
+    /// <summary>Grid width in cells, always within <see cref="MinSize"/>..<see cref="MaxSize"/>.</summary>
+    public int Cols { get; private set; } = DefaultSize;
+
+    public static int Clamp(int size) => Math.Clamp(size, MinSize, MaxSize);
+
+    /// <summary>
+    /// Changes the grid dimensions, keeping every region that still fits. A region that would hang off
+    /// the new edge is dropped rather than clipped — silently shrinking someone's merged cell is worse
+    /// than making them redo it — and the cells this frees are filled with empty 1x1 regions.
+    /// </summary>
+    public void Resize(int rows, int cols)
+    {
+        rows = Clamp(rows);
+        cols = Clamp(cols);
+        if (rows == Rows && cols == Cols)
+        {
+            return;
+        }
+
+        var surviving = _regions
+            .Where(r => r.Row + r.RowSpan <= rows && r.Col + r.ColSpan <= cols)
+            .ToList();
+
+        Rows = rows;
+        Cols = cols;
+        _regions.Clear();
+        _regions.AddRange(surviving);
+        FillGaps();
+        Normalize();
+    }
+
     /// <summary>The current tiling: one region per merged rectangle plus one 1x1 region per unmerged
     /// cell. Ordered top-left to bottom-right by the region's origin.</summary>
     public IReadOnlyList<MultiviewRegion> Regions => _regions;
 
-    /// <summary>Resets to 16 empty 1x1 cells.</summary>
+    /// <summary>Resets to an all-empty grid of 1x1 cells at the current dimensions.</summary>
     public void Reset()
     {
         _regions.Clear();
+        FillGaps();
+    }
+
+    /// <summary>Adds an empty 1x1 region for every cell not already covered.</summary>
+    private void FillGaps()
+    {
+        var occupied = new bool[Rows, Cols];
+        foreach (var region in _regions)
+        {
+            for (var r = region.Row; r < region.Row + region.RowSpan; r++)
+            {
+                for (var c = region.Col; c < region.Col + region.ColSpan; c++)
+                {
+                    occupied[r, c] = true;
+                }
+            }
+        }
+
         for (var row = 0; row < Rows; row++)
         {
             for (var col = 0; col < Cols; col++)
             {
-                _regions.Add(new MultiviewRegion(row, col, 1, 1, Empty));
+                if (!occupied[row, col])
+                {
+                    _regions.Add(new MultiviewRegion(row, col, 1, 1, Empty));
+                }
             }
         }
     }
@@ -157,8 +218,9 @@ public sealed class MultiviewRegionModel
         _regions[index] = region with { Content = content };
     }
 
-    /// <summary>Serializes the current tiling to a <see cref="MultiviewLayout"/> carrying both the legacy
-    /// 16-cell array (for back-compat consumers) and the new grid/regions form (the canonical one).</summary>
+    /// <summary>Serializes the current tiling to a <see cref="MultiviewLayout"/> carrying both a flat
+    /// row-major cell array (back-compat; only meaningful for the legacy 4x4 grid, since that form has
+    /// no way to express its own width) and the canonical grid/regions pair, which consumers should read.</summary>
     public MultiviewLayout ToLayout()
     {
         var cells = new string[Rows * Cols];
@@ -174,11 +236,24 @@ public sealed class MultiviewRegionModel
     }
 
     /// <summary>Loads a layout (legacy <c>cells</c> or new <c>regions</c> form, normalized via
-    /// <see cref="MultiviewLayoutNormalizer"/>) into the model, clamping to the 4x4 grid and filling any
-    /// uncovered cells with empty 1x1 regions.</summary>
+    /// <see cref="MultiviewLayoutNormalizer"/>) into the model. The layout's own grid size is adopted
+    /// (clamped to <see cref="MinSize"/>..<see cref="MaxSize"/>); regions that fall outside it are
+    /// dropped and any uncovered cells filled with empty 1x1 regions.</summary>
     public void Load(MultiviewLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
+
+        if (layout.Grid is { } grid)
+        {
+            Rows = Clamp(grid.Rows);
+            Cols = Clamp(grid.Cols);
+        }
+        else
+        {
+            // Legacy `cells` payloads are always the 4-column 16-cell form.
+            Rows = DefaultSize;
+            Cols = DefaultSize;
+        }
 
         var incoming = MultiviewLayoutNormalizer.ToRegions(layout);
         var occupied = new bool[Rows, Cols];
@@ -227,17 +302,7 @@ public sealed class MultiviewRegionModel
             _regions.Add(new MultiviewRegion(region.Row, region.Col, rowSpan, colSpan, region.Content ?? Empty));
         }
 
-        for (var row = 0; row < Rows; row++)
-        {
-            for (var col = 0; col < Cols; col++)
-            {
-                if (!occupied[row, col])
-                {
-                    _regions.Add(new MultiviewRegion(row, col, 1, 1, Empty));
-                }
-            }
-        }
-
+        FillGaps();
         Normalize();
     }
 

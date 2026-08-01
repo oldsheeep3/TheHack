@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ハードウェア — Switcher</title>
+<meta name="description" content="Pico 2W ベースのモジュール式コントローラー。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark"></span> Switcher</a>
+    <nav class="site-nav" aria-label="サイト">
+      <a href="index.html">ホーム</a>
+      <a href="features.html">機能</a>
+      <a href="guide.html">使い方</a>
+      <a href="hardware.html" data-soon>ハードウェア</a>
+      <a href="atem.html" data-soon>ATEM 連携</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Hardware</p>
+      <h1>ハードウェア <span class="pill is-soon">準備中</span></h1>
+      <p class="lede">モジュール式の物理コントローラーについて。ページは準備中ですが、現行アプリ側の対応状況を先に記載します。</p>
+    </div>
+  </div>
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <h2>現在対応していること</h2>
+      </div>
+      <div class="grid grid-3">
+        <article class="card">
+          <span class="tag">Auto discovery</span>
+          <h3>接続したモジュールだけが出る</h3>
+          <p>コントローラーが送る接続ビットマップをアプリが監視し、<strong>実際に挿さっている
+          モジュールの行だけ</strong>を表示します。存在しないハードウェアの割当欄は出ません。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Switches</span>
+          <h3>スイッチでソースを載せる</h3>
+          <p>1 モジュールあたり 4 スイッチ（PGM1/PGM2 × SRC1/SRC2）。押すと割り当てたソースが
+          そのプログラムバスに載ります。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Backlight</span>
+          <h3>バックライトがタリーに追随</h3>
+          <p>現在の PGM / PVW 状態からスイッチごとの色を算出して返します。手元を見るだけで
+          何が出ているか分かります。</p>
+        </article>
+        <article class="card">
+          <span class="tag">VR</span>
+          <h3>ボリューム入力</h3>
+          <p>モジュールごとに 2 系統の VR。割り当て先は画面から選べます。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Hot plug</span>
+          <h3>抜き差ししても設定が残る</h3>
+          <p>接続され続けているモジュールの割当は維持されます。差し直しのたびに組み直す必要は
+          ありません。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Resilience</span>
+          <h3>コントローラー無しでも動く</h3>
+          <p>コントローラーが無い／外れた状態でも、アプリは画面とキーボードだけで完全に操作できます。</p>
+        </article>
+      </div>
+
+      <div class="note" style="margin-top:28px">
+        <p><strong>このページには今後、</strong>基板・筐体・組み立て・ファームウェアの書き込み手順を
+        掲載する予定です。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Switcher — 2026-Team-38</span>
+    <span class="spacer"></span>
+    <a href="index.html">ホーム</a>
+    <a href="features.html">機能</a>
+    <a href="guide.html">使い方</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

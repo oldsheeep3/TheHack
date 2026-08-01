@@ -1,16 +1,20 @@
 /**
- * Scene preset storage: a saved snapshot of the full 2-system ME
- * composition (both `PgmBus` layer stacks) plus the 4x4 multiview
- * assignment. Stored in `localStorage` today; kept behind `PresetStore` so
- * a future PC-side presets API can be swapped in without touching callers.
+ * Scene preset storage: a saved snapshot of the full 2-system ME composition (both `PgmBus` layer
+ * stacks) plus the multiview layout. Stored in `localStorage` today; kept behind `PresetStore` so a
+ * future PC-side presets API can be swapped in without touching callers.
+ *
+ * The multiview half is stored in the region form (`grid` + `regions`), the same shape the PC accepts —
+ * a preset written against the old fixed 4x4 would flatten merged regions when loaded, which is why the
+ * storage key is versioned rather than migrated.
  */
-import type { MultiviewCell, PgmBus, ProgramLayer } from '../protocol/types'
-import { createEmptyMultiviewCells } from './multiview'
+import type { MultiviewGrid, MultiviewRegion, PgmBus, ProgramLayer } from '../protocol/types'
+import { DEFAULT_GRID, createGridRegions } from './multiview'
 
 export interface ScenePreset {
   name: string
   programs: Record<PgmBus, ProgramLayer[]>
-  multiview: MultiviewCell[]
+  multiviewGrid: MultiviewGrid
+  multiviewRegions: MultiviewRegion[]
 }
 
 export interface PresetStore {
@@ -24,11 +28,12 @@ export function emptyScenePreset(name: string): ScenePreset {
   return {
     name,
     programs: { PGM1: [], PGM2: [] },
-    multiview: createEmptyMultiviewCells(),
+    multiviewGrid: DEFAULT_GRID,
+    multiviewRegions: createGridRegions(DEFAULT_GRID),
   }
 }
 
-const STORAGE_KEY = 'phone-bridge:scene-presets-v2'
+const STORAGE_KEY = 'phone-bridge:scene-presets-v3'
 
 export class LocalStoragePresetStore implements PresetStore {
   private readonly storage: Storage

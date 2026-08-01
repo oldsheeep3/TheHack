@@ -7,12 +7,17 @@ using Switcher.Contracts;
 namespace Switcher.App.ViewModels;
 
 /// <summary>
-/// One row of the output-assignment panel: a fixed physical sink (<see cref="OutputSink.Vcam1"/>/
-/// <see cref="OutputSink.Vcam2"/>/<see cref="OutputSink.Hdmi"/>/<see cref="OutputSink.Ndi1"/>/
-/// <see cref="OutputSink.Ndi2"/>) and which PGM bus currently feeds it (docs/specs/00-system-overview.md
-/// §4.2 <c>PUT /api/v1/outputs</c>). <see cref="DisplayId"/>/<see cref="HideCursor"/>/
-/// <see cref="Fullscreen"/> only apply to the <see cref="OutputSink.Hdmi"/> row (requirement 1);
-/// <see cref="NdiName"/> only applies to the NDI rows (requirement 5).
+/// One row of the output-assignment panel: a physical sink and which PGM bus currently feeds it
+/// (docs/specs/00-system-overview.md §4.2 <c>PUT /api/v1/outputs</c>).
+/// <para>
+/// The rows used to be a fixed five, one per sink that existed, so a row could name its own sink in a
+/// literal. Since the table became operator-editable (<see cref="OutputCatalog"/>) a row can carry any
+/// sink of any kind, in any order, so everything that used to be hard-coded per row — the header text
+/// and which extra controls apply — is derived from <see cref="OutputCatalog"/> instead.
+/// <see cref="DisplayId"/>/<see cref="HideCursor"/>/<see cref="Fullscreen"/> only apply to
+/// <see cref="OutputKind.Hdmi"/> rows (requirement 1); <see cref="NdiName"/> only to
+/// <see cref="OutputKind.Ndi"/> rows (requirement 5).
+/// </para>
 /// </summary>
 public sealed class OutputAssignmentRowViewModel : INotifyPropertyChanged
 {
@@ -32,9 +37,16 @@ public sealed class OutputAssignmentRowViewModel : INotifyPropertyChanged
 
     public OutputSink Sink { get; }
 
-    public bool IsHdmi => Sink == OutputSink.Hdmi;
+    public OutputKind Kind => OutputCatalog.KindOf(Sink);
 
-    public bool IsNdi => Sink is OutputSink.Ndi1 or OutputSink.Ndi2;
+    /// <summary>Row header, e.g. <c>"HDMI 2"</c>. The rows are no longer in a known fixed order, so the
+    /// operator needs the ordinal spelled out to tell one sink of a kind from another; the raw enum name
+    /// (<c>Hdmi2</c>) is a wire detail rather than something to put in front of them.</summary>
+    public string Label => $"{OutputCatalog.LabelOf(Kind)} {OutputCatalog.OrdinalOf(Sink)}";
+
+    public bool IsHdmi => Kind == OutputKind.Hdmi;
+
+    public bool IsNdi => Kind == OutputKind.Ndi;
 
     public IReadOnlyList<OutputSource> SourceOptions { get; } = Enum.GetValues<OutputSource>();
 
@@ -90,8 +102,10 @@ public sealed class OutputAssignmentRowViewModel : INotifyPropertyChanged
 
     public void LoadFrom(OutputAssignment assignment)
     {
+        ArgumentNullException.ThrowIfNull(assignment);
+
         Source = assignment.Source;
-        DisplayId = assignment.DisplayId ?? 0;
+        DisplayId = assignment.DisplayId ?? OutputDefaults.DefaultHdmiDisplayId;
         HideCursor = assignment.HideCursor ?? true;
         Fullscreen = assignment.Fullscreen ?? true;
         NdiName = assignment.NdiName ?? string.Empty;

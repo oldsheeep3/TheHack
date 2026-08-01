@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# 個人リポジトリから最新を取り込んでミラーする（VPS 上で動く）。
+#
+#   mirror-sync              … 全ブランチ + 全タグ
+#   mirror-sync develop      … 指定ブランチだけ
+#
+# 通常は個人リポジトリ側の GitHub Actions（.github/workflows/mirror.yml）が tailnet 経由で
+# SSH してこれを叩く。手で叩くのは、その経路が使えないとき（Actions が落ちている、
+# tailnet に出られない、初回の一括コピーなど）。
+set -euo pipefail
+
+MIRROR_HOME="${MIRROR_HOME:-$HOME/mirror}"
+REPO_DIR="${MIRROR_REPO_DIR:-$MIRROR_HOME/TheHack.git}"
+
+if [ $# -gt 0 ]; then
+  # 指定ブランチだけ取り込む。
+  for branch in "$@"; do
+    git -C "$REPO_DIR" fetch --quiet --no-tags personal "+refs/heads/${branch}:refs/heads/${branch}"
+  done
+  exec "$MIRROR_HOME/mirror.sh" "$@"
+fi
+
+# 個人リポジトリの全ブランチ・全タグに合わせる（--prune で消えたブランチも落とす）。
+git -C "$REPO_DIR" fetch --quiet --prune --force personal \
+  '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+
+mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/heads)
+
+# ブランチ側が一部失敗してもタグの同期までは済ませ、最後にまとめて失敗にする。
+failed=0
+"$MIRROR_HOME/mirror.sh" "${branches[@]}" || failed=1
+
+# タグはそのまま同名で送る（PR は不要）。ミラー先で別のコミットを指していると弾かれるが、
+# 上書きはしない。
+if ! git -C "$REPO_DIR" push --quiet hackathon 'refs/tags/*:refs/tags/*'; then
+  echo "[mirror] warn: 一部のタグを push できませんでした（ミラー先で別のコミットを指している可能性）"
+fi
+
+exit "${failed}"

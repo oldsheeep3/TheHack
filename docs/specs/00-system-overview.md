@@ -18,7 +18,7 @@
 ## 1. 背景・目的
 
 - 既存のハードウェア（ATEM Mini）と自作ハードウェア（自作スイッチングモジュール群 + Pico 2W）、およびネットワーク技術（SRT / NDI / WebAPI）を融合した、次世代のハイブリッドIP映像スイッチャーシステムを構築する。
-- PC上に常駐する制御アプリを「脳」とし、複数プロトコル（WebCam(UVC) / NDI / SRT）の映像入力・PiP合成・**2系統プログラム(PGM1/PGM2)出力**・仮想カメラ/HDMI出力を一元化する。
+- PC上に常駐する制御アプリを「脳」とし、複数プロトコル（WebCam(UVC) / NDI / SRT）の映像入力・PiP合成・**2系統プログラム(PGM1/PGM2)出力**・仮想カメラ/HDMI/NDI出力を一元化する。
 - DIYでありながらプロ用スイッチャーに匹敵する多人数オペレーション（メイン/サブ分業）と拡張性を実現する。
 
 ## 2. システムアーキテクチャ
@@ -32,10 +32,10 @@
   各モジュール:                                     │  ├─ 映像エンジン(GStreamer + GPU合成)
    - SW×4 (pgm1/pgm2 × src1/src2 マトリクス)         │  ├─ 2系統ME(PGM1/PGM2 + PVW1/PVW2)
    - アナログVR×2 (src1/src2)                        │  ├─ 4x4 コンフィギュラブル・マルチビュー
-   - SK6812 バックライト×4                           │  ├─ 出力: 仮想カメラ×2 + HDMI(全画面/カーソル非表示)
+   - SK6812 バックライト×4                           │  ├─ 出力: 仮想カメラ/HDMI(全画面)/NDI を追加式(カメラ1・他各3・計6)
    - CH32V003F6P4                                    │  ├─ 設定WebUI/API (8080)
         │  ▲                                         │  └─ タリーUDP配信 (9999 → 外部タリーデバイス)
-        │  │ (I2C マルチドロップ: Pico=master)         │        ▲
+        │  │ (I2C: スロット毎に1バス, Pico=master)     │        ▲
         ▼  │                                          │        │ (Wi-Fi/BT リモート or USB-HID)
 [ マスター: Pico 2W ] ──(USB-HID: 集約した SW/VR 状態)──→ メインPC
         │  ▲                                          │
@@ -48,10 +48,10 @@
 ### 2.1 ハードウェア構成方針（改訂: 2026-07-18）
 
 - **スイッチングモジュール**は内部に **CH32V003F6P4（RISC-V, 低コストMCU）** を搭載する。1モジュールは以下を持つ:
-  - **スイッチ×4**: `(pgm1, pgm2) × (src1, src2)` のマトリクス。各ソースを PGM1／PGM2 のどちらのプログラムバスに載せるかを直接トグルする。
+  - **スイッチ×4**: 論理的に `(pgm1, pgm2) × (src1, src2)` の組み合わせ。各ソースを PGM1／PGM2 のどちらのプログラムバスに載せるかを直接トグルする（実基板では4個とも専用GPIOへ直結。走査マトリクスではない）。
   - **アナログボリューム×2**: src1／src2 に1つずつ。用途はトランジション/汎用アサイナブルパラメータ（§4.2）。
   - **スイッチバックライト×4**: `SK6812MINI-E`（各スイッチ1灯、モジュール内で数珠つなぎ）。色はアプリ状態を反映（PCが算出）。
-- 各モジュールの CH32V003 は **I2Cスレーブ**として、マスターの **Pico 2W（I2Cマスター）** と接続する（マルチドロップ、モジュールをアドレスで識別・拡張）。
+- 各モジュールの CH32V003 は **I2Cスレーブ**として、マスターの **Pico 2W（I2Cマスター）** と接続する（実基板ではモジュール1台につき専用のI2Cバス1本を数珠つなぎで配り、挿さっているバス＝スロットでモジュールを識別する。§4.5）。
 - **Pico 2W の役割は縮小**し、以下のみを担う:
   1. 全モジュールを I2C でポーリングして SW/VR 状態を**集約**し、**USB-HID** としてPCへ伝達する（§4.1）。
   2. PCが算出したバックライト色を **HID出力レポート**で受け取り、I2C で各モジュールへ配布する（§4.5）。
@@ -64,7 +64,7 @@
 
 | コンポーネント | 主な責務 |
 | --- | --- |
-| PC常駐アプリ | 異種プロトコル映像入力(NDI/WebCam/SRT)のOBS的な自由追加・デコード、2系統ME(PGM1/PGM2)のPiP合成、4x4マルチビュー、仮想カメラ×2/HDMI出力、設定WebAPI/UI、タリーUDP配信、HID経由のコントローラー入力受信/バックライト指示、**ATEM遠隔制御クライアント**(UDP9910) |
+| PC常駐アプリ | 異種プロトコル映像入力(NDI/WebCam/SRT)のOBS的な自由追加・デコード、2系統ME(PGM1/PGM2)のPiP合成、4x4マルチビュー、仮想カメラ/HDMI/NDI出力（オペレーターが追加、仮想カメラ1・HDMI/NDI各3・計6まで）、設定WebAPI/UI、タリーUDP配信、HID経由のコントローラー入力受信/バックライト指示、**ATEM遠隔制御クライアント**(UDP9910) |
 | スイッチングモジュール(CH32V003) | SW×4スキャン、VR×2のADC読取、SK6812×4駆動、I2Cスレーブとして状態提供/バックライト受領 |
 | Pico 2W マスター | 全モジュールをI2Cで集約→USB-HIDでPCへ、HID出力のバックライトをI2C配布、設定保持、（任意）Wi-Fi/BTワイヤレス |
 | スマホWeb設定UI | ネットワーク経由（Wi-Fi/BT/PCプロキシ）でPCへ接続し、ソース定義・レイアウト・出力割当・Pico設定を操作 |
@@ -112,7 +112,10 @@ Pico 2W はベンダー定義の HID デバイスとして列挙され、集約�
 OBS的にソースを自由追加し、2系統ME・マルチビュー・出力割当・モジュール割付・Pico設定を操作する。JSONフィールドはスネークケース。
 
 - **ソース管理**
-  - `GET /api/v1/sources` … 定義済みソース一覧（`SourceInfo[]`）。
+  - `GET /api/v1/sources` … エンジンが実行中のソース一覧（`SourceInfo[]`: チャンネル/名前/プロトコル/状態）。
+  - `GET /api/v1/sources/definitions` … 各ソースの設定内容（`SourceDefinition[]`）。`SourceInfo` は種別ごとの
+    設定を持たないため、設定UIの編集フォームはこちらから復元する（`PUT` は定義全体を置換するので、
+    読み出せないと未取得のフィールドを潰してしまう）。
   - `POST /api/v1/sources` … ソース追加（`SourceDefinition`）。
   - `PUT /api/v1/sources/{id}` / `DELETE /api/v1/sources/{id}` … 更新/削除。
 
@@ -121,12 +124,23 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 {
   "id": "src-ndi-cam1",
   "name": "Cam 1 (NDI)",
-  "type": "NDI",                       // "NDI" | "WEBCAM" | "SRT"
+  "type": "NDI",                       // "NDI" | "WEBCAM" | "SRT" | "IMAGE" | "HTML" | "MIX"
   "ndi": { "source_name": "STUDIO (Cam1)" },
   "webcam": null,                       // { "device_id": "...", "format": "1920x1080@30" }
-  "srt": null                           // { "url": "srt://192.168.1.100:9000?mode=caller", "latency_ms": 40 }
+  "srt": null,                          // { "url": "srt://192.168.1.100:9000?mode=caller", "latency_ms": 40 }
+  "image": null,                        // { "file_path": "C:\\media\\logo.png" }
+  "html": null,                         // { "url": "https://...", "width": 1920, "height": 1080,
+                                        //   "is_local_file": false, "fps": 30, "css": null }
+  "mix": null,                          // { "layers": [ { "source_id": "...", "x_position": 0, "y_position": 0,
+                                        //   "width": 960, "height": 1080, "z_order": 0, "crop": null } ],
+                                        //   "canvas_width": 1920, "canvas_height": 1080 }
+  "audio_mode": "AFV"                   // "OFF" | "ON" | "AFV"（既定 AFV: 映像が本番のときだけ聞こえる）
 }
 ```
+
+- **入力デバイス列挙**
+  - `GET /api/v1/devices/{webcam|ndi}` … 選択可能な入力デバイス（`DeviceInfo[]`）。SRTはプッシュ型のため列挙不可。
+  - `GET /api/v1/srt/setup` … SRT受信の待受ポート・このPCのLANアドレス・送信側に渡すURL（`SrtSetupInfo`）。
 
 - **プログラム/合成（2系統ME）**
   - `POST /api/v1/program` … PGM1/PGM2 の合成メンバー・PiPレイアウトの適用、および PVW→PGM の TAKE。
@@ -143,30 +157,66 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 }
 ```
 
-- **マルチビュー（4x4 コンフィギュラブル）**
-  - `PUT /api/v1/multiview` … 16セルの割当（`PGM1`/`PGM2`/`PVW1`/`PVW2`/`SRC:<id>`/`EMPTY`）。
+- **マルチビュー（コンフィギュラブル）**
+  - `GET /api/v1/multiview` … 現在のレイアウト。
+  - `PUT /api/v1/multiview` … レイアウト置換。割当トークンは `PGM1`/`PGM2`/`PVW1`/`PVW2`/`SRC:<id>`/`EMPTY`。
+  - 2形式あり、**どちらか一方だけ**を送る（両方／どちらも無しは 400）:
+    - 旧: `cells`（4x4固定の16セル）。旧ビルドが書いた設定を読むために維持。
+    - 新: `grid`（4〜6行×4〜6列）＋ `regions`（セル結合可。グリッドを過不足なく覆うこと）。
 
 ```json
+// 旧形式
 { "cells": [ "PGM1","PGM2","PVW1","PVW2",
              "SRC:src-ndi-cam1","SRC:src-webcam-1","EMPTY","EMPTY",
              "EMPTY","EMPTY","EMPTY","EMPTY",
              "EMPTY","EMPTY","EMPTY","EMPTY" ] }
+
+// 新形式（左上2x2をPGM1に結合した例）
+{
+  "grid": { "rows": 4, "cols": 4 },
+  "regions": [
+    { "row": 0, "col": 0, "row_span": 2, "col_span": 2, "content": "PGM1" }
+    // ... 残りのセルを1x1で埋める
+  ]
+}
 ```
 
 - **出力割当**
-  - `PUT /api/v1/outputs` … 仮想カメラ×2／HDMIディスプレイへ PGM を割当。
+  - `GET /api/v1/outputs` … 現在の出力テーブル。
+  - `PUT /api/v1/outputs` … 出力テーブル全体を置換し、各 sink へ PGM を割当。
+  - sink は固定5系統ではなく、**種別（`WEBCAM`/`HDMI`/`NDI`）＋序数**で表す:
+    `VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`。
+  - 既定は **`VCAM1`＋`HDMI1` の2出力**（各プログラムバスに最低1つ、という規則を満たす最小構成）。
+    オペレーターはここから HDMI / NDI を追加でき、上限は**Webcam 1・HDMI 3・NDI 3・合計6**。
+  - **Webcam は1本まで**（OBSの仮想カメラ出力が1本しかないため）。2本目を認めても NDI 送出へ
+    こっそり振り替えるしかなく、sink の種別が実際の出口を偽ることになるので、そもそも追加させない。
+  - 序数なしの旧トークン（`"HDMI"`/`"VCAM"`/`"NDI"`）は各種別の1番目として読み、保存時に序数付きへ書き戻す。
+    `VCAM2`/`VCAM3` も**旧ビルドが書いた設定を読み込めるように**トークンとしては残る（エンジンは NDI 送出
+    `SWITCHER VCAM2` / `SWITCHER VCAM3` として扱う）が、上限を超えるため新規に追加はできない。
 
 ```json
 {
   "outputs": [
     { "sink": "VCAM1", "source": "PGM1" },
-    { "sink": "VCAM2", "source": "PGM2" },
-    { "sink": "HDMI",  "display_id": 1, "source": "PGM1", "hide_cursor": true, "fullscreen": true }
+    { "sink": "HDMI1", "display_id": 1, "source": "PGM2", "hide_cursor": true, "fullscreen": true },
+    { "sink": "NDI1",  "source": "PGM1", "ndi_name": "SWITCHER PGM1" }
   ]
 }
 ```
 
+- **音声出力**
+  - `GET /api/v1/audio/devices` … このPCの再生デバイス一覧（`AudioDeviceInfo[]`）。
+  - `GET /api/v1/audio/outputs` … 現在のバス→デバイス割当。
+  - `PUT /api/v1/audio/outputs` … 割当テーブル全体を置換。1つのバスを複数デバイスへ同時に出せる
+    （空の `device_id` はシステム既定デバイス。空配列は「音声を出さない」の意）。
+
+```json
+{ "outputs": [ { "bus": "PGM1", "device_id": "", "device_name": null },
+               { "bus": "PGM2", "device_id": "{0.0.0.1}", "device_name": "Speakers" } ] }
+```
+
 - **モジュール割付・ボリューム割当**
+  - `GET /api/v1/modules` … 現在のモジュール割付。
   - `PUT /api/v1/modules` … 物理モジュールの `src1/src2` を論理ソースへ紐付け、VRの割当先（トランジション/汎用パラメータ）を指定、バックライトポリシーを設定。
 
 ```json
@@ -180,7 +230,11 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 ```
 
 - **ATEM 遠隔制御**
+  - `GET /api/v1/atem` … 現在の接続設定と割付。
   - `PUT /api/v1/atem` … 制御対象 ATEM の接続設定（IP）とボタン→ATEMコマンド割付を保存。
+  - `GET /api/v1/atem/discover` … LANを走査して見つかったATEM一覧（`AtemDeviceInfo[]`）。
+  - `POST /api/v1/atem/streaming` … 接続中ATEMのストリーミング出力先URL（`srt://` でPCへ送り込む用途）を設定。
+    ATEM未接続時は 409（リクエストの誤りではないため4xxで送信者を責めない）。
   - `POST /api/v1/atem/command` … 単発のATEMコマンド送出（Program/Preview入力切替・Cut/Auto）。
 
 ```json
@@ -222,7 +276,7 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 
 | ポート | プロトコル | 用途 |
 | --- | --- | --- |
-| 8080 | HTTP/WebSocket | 設定WebAPI・WebUI・（スマホ）リモート接続 |
+| 8080 | HTTP/WebSocket | 設定WebAPI・設定WebUI（`/` から静的配信）・（スマホ）リモート接続 |
 | 9000 | SRT (Listener) | 映像入力（ATEM PGM/SRTソース等） |
 | 9999 | UDP broadcast | タリー配信（外部タリーデバイス向け） |
 | 9910 | UDP | ATEM遠隔制御（ATEM純正プロトコル） |
@@ -232,7 +286,11 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 ### 4.5 モジュール内部I2Cプロトコル（Pico 2W master ↔ CH32V003 slave）【新規】
 
 - バス: I2C（100k〜400kHz）。マスター= Pico 2W、スレーブ= 各モジュール CH32V003。
-- アドレス: ベース `0x30` + モジュール番号（0..`MAX_MODULES`-1）= `0x30`..`0x37`。番号はモジュールのストラップ（GPIO/抵抗ID）で設定。
+- **バス構成（2026-08-01 実基板確定）**: マスター基板 `softswitcher_module_master` は**モジュール1台につき専用のI2Cバスを1本**引き出す（スロット数 = `MODULE_BUS_COUNT` = 5）。モジュールは数珠つなぎで、先頭の1台がバス1（1x07コネクタ）を消費し、残りのバス2..5は2x08コネクタでそのまま次段へ渡される。各モジュールは受け取った束の先頭ペアを自分のI2Cとし、残りを1ペアずつずらして次段へ渡すため、**数珠つなぎのn番目のモジュール = バスn**となる。
+- アドレス: 実基板のモジュールにはアドレスストラップが無く（空きADCピンも無い）、全モジュールが `0x30` 固定で待ち受ける。**モジュール番号（HIDレポートのスロット位置）は「どのバスで応答したか」で決まる**。
+  - Pico側のバス割当（GPIO）: バス1=`20/21`、バス2=`26/27`、バス3=`4/5`、バス4=`2/3`、バス5=`0/1`（SDA/SCL）。RP2040/RP2350のI2Cコントローラは2基のため、i2c0（バス1,3,5）とi2c1（バス2,4）をピン機能の付け替えで時分割する。非選択バスはプルアップでHigh（アイドル）に保たれる。
+  - 外付けプルアップ抵抗が基板・モジュールとも無く内蔵プルアップに頼るため、バスクロックの既定は100kHz。
+  - 旧方式（1本のマルチドロップバス＋ストラップで `0x30`+n）は、将来モジュール側にアドレスストラップを載せる場合に備えてファーム側の変換関数（`i2c_slave_address_for_module()`）としてのみ残っている。
 - レジスタマップ:
 
 | レジスタ | 方向 | 長さ | 内容 |
@@ -263,6 +321,15 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 
 ## 7. 仕様変更履歴
 
+- **2026-08-01**: 実基板（`softswitcher_module_master` / `softswitcher_module_sw4`）の確定ピンアサインに合わせてI2Cトポロジを改訂（§4.5）—
+  1本のI2Cマルチドロップ＋アドレスストラップを廃し、**スロットごとの専用I2Cバス（5本）＋全モジュール共通アドレス `0x30`** へ。モジュール番号は挿さっているバス（数珠つなぎの位置）で決まる。
+  モジュール側のSW×4は2×2マトリクス走査から**専用GPIO直結の直読み**（`PD2`/`PD4`/`PD3`/`PD5`）へ、VRは`PA1`/`PA2`（ADCチャネル1/0）、バックライトは`PC4`、I2Cは`PC1`/`PC2`。
+- **2026-07-31**: 出力割当を**可変テーブル**へ改訂（§4.2）— 固定5系統（`VCAM1`/`VCAM2`/`HDMI`/`NDI1`/`NDI2`）を廃し、
+  種別＋序数の sink（`VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`）をオペレーターが追加する方式へ。
+  既定は `VCAM1`＋`HDMI1`、上限は Webcam 1・HDMI 3・NDI 3・合計6。OBS の仮想カメラ出力が1本しかないため
+  **Webcam は1本まで**とし、2本目を NDI 送出へ振り替えて sink の種別が出口を偽ることがないようにする。
+  `VCAM2`/`VCAM3` は旧ビルドの設定を読み込むための互換トークンとしてのみ残る（エンジンは NDI 送出
+  `SWITCHER VCAM2` / `SWITCHER VCAM3` で処理）。序数なしの旧トークンは各種別の1番目として読む。
 - **2026-07-18**: 大幅改訂（壁打ちにて確定）—
   - モジュール内MCUを **CH32V003F6P4** に確定。SW×4(pgm1/pgm2×src1/src2)＋VR×2＋SK6812×4。
   - モジュール↔Pico を **I2Cマルチドロップ**で確定（§4.5）。

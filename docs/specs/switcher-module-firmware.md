@@ -6,15 +6,24 @@
 
 - 各スイッチングモジュールに組み込む **CH32V003F6P4（RISC-V, 低コストMCU）** のファームウェア。
 - 1モジュールは以下のI/Oを持ち、これらをスキャン/駆動して、マスターの Pico 2W と **I2C（スレーブ）** で通信する:
-  - **スイッチ×4**: `(pgm1, pgm2) × (src1, src2)` マトリクス。
+  - **スイッチ×4**: 論理的に `(pgm1, pgm2) × (src1, src2)`。実基板では専用GPIOへ直結（走査マトリクスではない）。
   - **アナログボリューム×2**: `src1`, `src2` に1つずつ（ADC）。
   - **バックライトLED×4**: `SK6812MINI-E`（各SWに1灯、モジュール内で数珠つなぎ）。
+- **実基板 `softswitcher_module_sw4` のピンアサイン（2026-08-01 確定, `include/module_config.h` が単一のソース）**:
+
+| 信号 | ピン | 備考 |
+| --- | --- | --- |
+| `SDA` / `SCL` | 11pin `PC1` / 12pin `PC2` | I2C1のシリコン固定ピン |
+| `LED_DATA` | 14pin `PC4` | SK6812×4 チェーン |
+| `SW1`〜`SW4` | 19pin `PD2` / 1pin `PD4` / 20pin `PD3` / 2pin `PD5` | 内部プルアップ、アクティブLow。`STATE[0]` の b0..b3 に順に対応 |
+| `VOL1` / `VOL2` | 5pin `PA1` / 6pin `PA2` | ADCチャネル1 / チャネル0 |
+
 - モジュールは**外部通信しない**。状態提供とバックライト受領のみを I2C 経由で Pico に対して行う（親仕様書 §2.1）。
 
 ## 2. 機能要件
 
 ### 2.1 スイッチ入力スキャン
-- [ ] 4スイッチ（`PGM1×SRC1, PGM1×SRC2, PGM2×SRC1, PGM2×SRC2`）を常時スキャンし、**チャタリング防止（デバウンス）**を行う。
+- [ ] 4スイッチ（`SW1..SW4` = `PGM1×SRC1, PGM1×SRC2, PGM2×SRC1, PGM2×SRC2`）を専用GPIOの内部プルアップ入力として常時読み取り（アクティブLow）、**チャタリング防止（デバウンス）**を行う。
 - [ ] デバウンスは**純粋状態機械としてI/Oから分離**し、ホスト（native gcc/RISC-Vシミュレータ非依存）でユニットテスト可能にする。
 - [ ] 確定した押下/離しの安定状態を、I2C `0x00 STATE` レジスタの下位4bit（`b0=PGM1×SRC1 … b3=PGM2×SRC2`）に反映する。
 
@@ -29,7 +38,7 @@
 - [ ] RGB→GRB 変換・フレーム組み立ては純粋関数に分離してテスト可能にする。色はPCが算出（本ファームは受領した色を忠実に出力するのみ）。
 
 ### 2.4 I2C スレーブ通信
-- [ ] I2Cスレーブとして動作。アドレスは **ベース `0x30` + モジュール番号**（0..`MAX_MODULES`-1）。番号はGPIOストラップ/抵抗IDで決定（`get_module_index()`）。
+- [ ] I2Cスレーブとして動作。実基板にはアドレスストラップが無いため**アドレスは `0x30` 固定**（`get_module_index()` は `MODULE_INDEX_FIXED`=0 を返す）。モジュールの識別はマスター側が「どのI2Cバス（スロット）で応答したか」で行う（親仕様書 §4.5）。将来ストラップを載せる場合は `i2c_slave_address_for_module()` が `0x30`+番号へ変換する。
 - [ ] レジスタマップ（親仕様書 §4.5）を実装:
   - `0x00 STATE`（read, 3B）: SW状態 / VR_SRC1 / VR_SRC2。
   - `0x10 BACKLIGHT`（write, 12B）: 4灯分RGB。
@@ -40,7 +49,7 @@
 
 - **MCU**: CH32V003F6P4（RISC-V RV32EC, 48MHz, Flash 16KB / SRAM 2KB）。
 - **開発環境（提案・確定候補）**: `ch32v003fun`（軽量・オープン、推奨）。代替: MounRiver Studio / PlatformIO(WCH)。
-- **ペリフェラル**: I2C(スレーブ), ADC(2ch), SPI or 厳密タイミングGPIO(SK6812), GPIO(SWマトリクス/ストラップ)。
+- **ペリフェラル**: I2C(スレーブ), ADC(2ch), SPI or 厳密タイミングGPIO(SK6812), GPIO(SW×4 プルアップ入力)。
 - **メモリ制約に注意**（SRAM 2KB）: バッファ・スタックを最小化。
 
 ## 4. 非機能要件
@@ -61,7 +70,7 @@ firmware/switcher-module/
 ├── ch32v003fun/            (submodule or vendored build glue)
 ├── include/module_config.h ピン定義・SW/VR/LEDピン・I2Cベースアドレス・モジュール番号取得
 ├── src/main.c              初期化 + メインループ
-├── src/switches.{c,h}      SWマトリクス走査（I/O） + switches_debounce.c（純粋）
+├── src/switches.{c,h}      SW直読み（I/O） + switches_debounce.c（純粋）
 ├── src/adc.{c,h}           VR読取（I/O） + adc_scale.c（純粋）
 ├── src/backlight.{c,h}     SK6812駆動（I/O） + sk6812_frame.c（純粋: RGB→GRB）
 ├── src/i2c_slave.{c,h}     I2Cスレーブ + レジスタマップ
@@ -74,4 +83,5 @@ firmware/switcher-module/
 
 ## 8. 仕様変更履歴
 
+- **2026-08-01**: 実基板 `softswitcher_module_sw4` の確定ピンアサインを反映。SW×4を2×2マトリクス走査から専用GPIO直読みへ、VRを`PA1`/`PA2`（ADCチャネル1/0）へ、`LED_DATA`を`PC4`へ。`PC4` がバックライトに使われるためモジュール番号ストラップ（ADC）は廃止し、I2Cアドレスは `0x30` 固定・識別はマスター側のバス（スロット）で行う方式へ改訂（親仕様書 §4.5）。
 - **2026-07-18**: 初版作成。CH32V003 モジュールファーム（SW×4 / VR×2 / SK6812×4 / I2Cスレーブ）を新規定義。

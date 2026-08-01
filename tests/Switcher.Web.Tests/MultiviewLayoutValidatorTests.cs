@@ -124,11 +124,41 @@ public class MultiviewLayoutValidatorTests
     [Fact]
     public void Validate_RejectsRegionOutsideGrid()
     {
-        var layout = new MultiviewLayout([], new MultiviewGrid(2, 2), [new MultiviewRegion(0, 0, 3, 3, "PGM1")]);
+        var layout = new MultiviewLayout([], Grid4x4, [new MultiviewRegion(0, 0, 5, 5, "PGM1")]);
 
         var errors = MultiviewLayoutValidator.Validate(layout);
 
         Assert.Contains(errors, e => e.Contains("rectangle inside"));
+    }
+
+    [Theory]
+    [InlineData(3, 4)]   // below the 4x4 floor
+    [InlineData(4, 7)]   // above the 6x6 ceiling
+    [InlineData(0, 0)]
+    public void Validate_RejectsGridOutsideSupportedRange(int rows, int cols)
+    {
+        var layout = new MultiviewLayout([], new MultiviewGrid(rows, cols), [new MultiviewRegion(0, 0, 1, 1, "PGM1")]);
+
+        var errors = MultiviewLayoutValidator.Validate(layout);
+
+        Assert.Contains(errors, e => e.Contains("between 4 and 6"));
+    }
+
+    [Fact]
+    public void Validate_AcceptsA6x6Grid()
+    {
+        var regions = new List<MultiviewRegion>();
+        for (var row = 0; row < 6; row++)
+        {
+            for (var col = 0; col < 6; col++)
+            {
+                regions.Add(new MultiviewRegion(row, col, 1, 1, "EMPTY"));
+            }
+        }
+
+        var errors = MultiviewLayoutValidator.Validate(new MultiviewLayout([], new MultiviewGrid(6, 6), regions));
+
+        Assert.Empty(errors);
     }
 
     [Fact]

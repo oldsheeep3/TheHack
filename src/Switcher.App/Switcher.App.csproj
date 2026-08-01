@@ -5,6 +5,9 @@
     <TargetFramework>net9.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- FrameBitmapWriter pins the frame buffer and uses WriteableBitmap's IntPtr overload, which
+         avoids an 8 MB copy per cell per tick. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -12,10 +15,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Switcher.Contracts\Switcher.Contracts.csproj" />
-    <ProjectReference Include="..\Switcher.Media\Switcher.Media.csproj" />
+    <ProjectReference Include="..\Switcher.Engine\Switcher.Engine.csproj" />
     <ProjectReference Include="..\Switcher.Web\Switcher.Web.csproj" />
     <ProjectReference Include="..\Switcher.Atem\Switcher.Atem.csproj" />
-    <ProjectReference Include="..\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
     <ProjectReference Include="..\Switcher.Hid\Switcher.Hid.csproj" />
   </ItemGroup>
 
@@ -30,5 +32,59 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!--
+    Deploy the native libobs engine (switcher-engine.dll) next to the app so DllImport("switcher-engine")
+    resolves at runtime, including under Visual Studio F5 / Rebuild. The DLL is a separate CMake build
+    (native\switcher-engine\build.bat, Windows + OBS only). This copy is best-effort: it prefers the
+    build matching the current $(Configuration), falls back to a Release native build, and silently
+    no-ops (just a message) when no native build exists - so the managed build stays green on Linux/CI
+    where libobs cannot link. obs.dll (libobs) itself must still be on PATH at runtime (see README /
+    launchSettings.json).
+  -->
+  <Target Name="CopyNativeSwitcherEngine" AfterTargets="Build">
+    <PropertyGroup>
+      <_NativeEngineBuild>$(MSBuildThisFileDirectory)..\..\native\switcher-engine\build</_NativeEngineBuild>
+      <_NativeEngineDll Condition="Exists('$(_NativeEngineBuild)\$(Configuration)\switcher-engine.dll')">$(_NativeEngineBuild)\$(Configuration)\switcher-engine.dll</_NativeEngineDll>
+      <_NativeEngineDll Condition="'$(_NativeEngineDll)' == '' And Exists('$(_NativeEngineBuild)\Release\switcher-engine.dll')">$(_NativeEngineBuild)\Release\switcher-engine.dll</_NativeEngineDll>
+    </PropertyGroup>
+    <Copy Condition="'$(_NativeEngineDll)' != ''"
+          SourceFiles="$(_NativeEngineDll)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+    <Message Condition="'$(_NativeEngineDll)' != ''" Importance="high"
+             Text="Copied native engine: $(_NativeEngineDll) -> $(OutDir)" />
+    <Message Condition="'$(_NativeEngineDll)' == ''" Importance="high"
+             Text="switcher-engine.dll not found under $(_NativeEngineBuild); build it via native\switcher-engine\build.bat (Windows + OBS). The app will fail at engine start (0x8007007E) without it." />
+  </Target>
+
+  <!--
+    Deploy the built settings web UI (apps\phone-bridge\dist) as wwwroot beside the app, which is where
+    WebHost looks for it. Serving the page from the API's own port is what keeps it same-origin with the
+    /api/v1/* calls it makes - a page served from anywhere else is blocked by the browser unless the host
+    (which binds 0.0.0.0) hands out CORS headers to the whole LAN.
+
+    Copy-if-present, like the native engine above: the front end is an npm build, so requiring node on
+    every managed build would break CI and any dev who only touches C#. Without it the API still starts,
+    it just serves no pages - hence the message pointing at the one command that fixes that.
+  -->
+  <Target Name="CopyPhoneBridgeUi" AfterTargets="Build">
+    <PropertyGroup>
+      <_PhoneBridgeDist>$(MSBuildThisFileDirectory)..\..\apps\phone-bridge\dist</_PhoneBridgeDist>
+    </PropertyGroup>
+    <ItemGroup>
+      <_PhoneBridgeUiFiles Include="$(_PhoneBridgeDist)\**\*" />
+    </ItemGroup>
+    <!-- Cleared first: Vite names assets by content hash, so copying over the top would leave every
+         previous build's index-<hash>.js behind for as long as the output directory lives. -->
+    <RemoveDir Condition="'@(_PhoneBridgeUiFiles)' != ''" Directories="$(OutDir)wwwroot" />
+    <Copy Condition="'@(_PhoneBridgeUiFiles)' != ''"
+          SourceFiles="@(_PhoneBridgeUiFiles)"
+          DestinationFiles="@(_PhoneBridgeUiFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Message Condition="'@(_PhoneBridgeUiFiles)' != ''" Importance="high"
+             Text="Copied settings web UI: $(_PhoneBridgeDist) -> $(OutDir)wwwroot" />
+    <Message Condition="'@(_PhoneBridgeUiFiles)' == ''" Importance="high"
+             Text="No settings web UI at $(_PhoneBridgeDist); build it with 'npm ci &amp;&amp; npm run build' in apps\phone-bridge. The API still runs; http://&lt;pc&gt;:8080/ will just serve nothing." />
+  </Target>
 
 </Project>

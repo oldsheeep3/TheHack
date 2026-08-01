@@ -2,9 +2,8 @@
 // 確定・1バイト授受・受信バッファ格納のみをISR(I2C1_EV_IRQHandler)で行う(親仕様書§4)。
 // レジスタ領域の判定・内容生成はGPIO非依存の i2c_regs.c に委譲する。
 //
-// I2C1のSDA/SCLはCH32V003のシリコン固定ピン(PC1/PC2)であり、SWマトリクス/VR/バック
-// ライトのGPIO(module_config.hの暫定プレースホルダ)とは異なりPCB配線選択の余地が
-// ないため、ここで直接指定する。
+// I2C1のSDA/SCLはCH32V003のシリコン固定ピン(11pin PC1 / 12pin PC2)。ピン番号自体は
+// 他のGPIOと同様 module_config.h に集約する。
 
 #include "i2c_slave.h"
 
@@ -17,8 +16,11 @@
 #include "module_index.h"
 #include "switches.h"
 
-#define I2C_SLAVE_SDA_PIN PC1
-#define I2C_SLAVE_SCL_PIN PC2
+#define I2C_SLAVE_SDA_PIN MODULE_I2C_SDA_PIN
+#define I2C_SLAVE_SCL_PIN MODULE_I2C_SCL_PIN
+
+_Static_assert(MODULE_I2C_SDA_PIN == PC1, "module I2C SDA must be PC1 (I2C1 fixed pin)");
+_Static_assert(MODULE_I2C_SCL_PIN == PC2, "module I2C SCL must be PC2 (I2C1 fixed pin)");
 
 // I2Cロジッククロック(バスクロックより高く設定する必要がある。ch32v003fun例に準拠)。
 #define I2C_SLAVE_LOGIC_CLOCK_HZ 2000000

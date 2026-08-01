@@ -13,64 +13,81 @@ using Switcher.App.Services;
 using Switcher.App.ViewModels;
 using Switcher.Atem;
 using Switcher.Contracts;
-using Switcher.Media;
-using Switcher.VirtualCam;
-using Switcher.VirtualCam.Display;
 using Forms = System.Windows.Forms;
 
 namespace Switcher.App;
 
 /// <summary>
-/// Main operator window (docs/specs/multiview-output-revision.md): configurable multiview with
-/// rectangular merge (requirement 3) + independent full-screen (requirement 4), 3-stage source add with
-/// device enumeration + SRT setup helper (requirement 6/7), output routing with HDMI display picker
-/// (requirement 1) and NDI sinks (requirement 5), operator-display move (requirement 2), module mapping,
-/// and PGM1/PGM2/PVW1/PVW2 tally. All PGM/PVW-affecting actions go through <see cref="AppOrchestrator"/>;
-/// the same-screen warning and rectangular-merge rules live in UI-independent, unit-tested classes
-/// (<see cref="DisplayConflictEvaluator"/> / <see cref="MultiviewRegionModel"/>).
+/// Operator console, laid out as a studio dock (design direction B): both M/E buses show their own
+/// preview/program monitor pair simultaneously (splittable rows so the operator picks how much room each
+/// gets), a shared transition bar underneath, a read-only multiview alongside, and four titled docks
+/// along the bottom — Sources, Buses, Outputs, Controller.
+///
+/// Arranging the multiview moved out to <see cref="MultiviewSettingsWindow"/>: it is a setup-time job,
+/// and keeping the merge/split editor on the live screen cost the program monitors the space they need.
+/// This window only renders the layout, framing each cell red when its content is on air and green when
+/// it is staged (<see cref="MultiviewTally"/>), which the native engine mirrors on the multiview output.
+///
+/// All PGM/PVW-affecting actions still go through <see cref="AppOrchestrator"/>.
 /// </summary>
 public partial class MainWindow : Window
 {
     private readonly AppOrchestrator _orchestrator;
-    private readonly IInputSourceManager _sourceManager;
+    private readonly IVideoEngine _engine;
     private readonly AtemController _atemController;
     private readonly FramePumpService _framePump;
-    private readonly OutputRouter _outputRouter;
-    private readonly IHdmiFullscreenOutput _hdmiOutput;
-    private readonly CompositorEngine _compositor;
-    private readonly IFullscreenPresenterFactory _presenterFactory;
     private readonly IDeviceQueryService _deviceQueryService;
-    private readonly AppConfig _config;
+    /// <summary>Mutable so an operator preference change (stage view, console display) both applies now
+    /// and is persisted on the next save — the field is the authoritative in-memory copy.</summary>
+    private AppConfig _config;
     private readonly ILogger<MainWindow> _logger;
 
     private readonly ObservableCollection<SourceTileViewModel> _tiles = [];
     private readonly ObservableCollection<string> _availableTokens = [];
     private readonly ObservableCollection<string> _availableSourceIds = [];
     private readonly ObservableCollection<MultiviewCellViewModel> _cells = [];
-    private readonly ObservableCollection<OutputAssignmentRowViewModel> _outputRows = [];
+    private readonly ObservableCollection<AudioOutputRowViewModel> _audioRows = [];
     private readonly ObservableCollection<ModuleMappingRowViewModel> _moduleRows = [];
     private readonly ObservableCollection<DisplayOption> _availableDisplays = [];
-    private readonly ObservableCollection<DeviceInfo> _devices = [];
-    private readonly Dictionary<string, WriteableBitmap> _cellBitmaps = [];
+
+    private readonly ObservableCollection<BusControlViewModel> _buses =
+    [
+        new BusControlViewModel(ProgramBus.Pgm1),
+        new BusControlViewModel(ProgramBus.Pgm2),
+    ];
+
+    private readonly PreviewBitmapCache _previewBitmaps;
     private readonly MultiviewRegionModel _regionModel = new();
 
-    private ProjectorWindow? _projectorWindow;
+    /// <summary>The editable output table (rows + the add/remove rules). Not a plain row collection any
+    /// more: the operator adds and removes sinks, so the ceilings and the "which sink is next" decision
+    /// live in the model rather than in this window.</summary>
+    private readonly OutputTableViewModel _outputs;
+
+    /// <summary>One projector window per HDMI sink, keyed by sink. Up to
+    /// <see cref="OutputCatalog.MaxSinksPerKind"/> displays can be presenting at once, each on its own monitor
+    /// and each attached to the engine under its own <c>HDMI&lt;n&gt;</c> target, so they open and close
+    /// independently.</summary>
+    private readonly Dictionary<OutputSink, ProjectorWindow> _projectorWindows = new();
+
     private MultiviewFullscreenWindow? _multiviewFullscreen;
-    private SrtSetupInfo? _lastSrtSetup;
+    private MultiviewSettingsWindow? _multiviewSettings;
+    private MixSourceWindow? _mixEditor;
+    private AddSourceWindow? _addSourceWindow;
+    private AtemSettingsWindow? _atemSettings;
     private int _operatorDisplayIndex;
-    private bool _suppressMultiviewApply;
-    private bool _isDraggingSelection;
     private bool _uiReady;
+
+    /// <summary>Which M/E the transition bar and keyboard shortcuts act on. Both ME rows are visible at
+    /// once, and both buses stay fully operable from the Buses dock — the "focused" ME just picks who
+    /// receives Space/A/Escape/1-9 and the shared CUT/AUTO buttons.</summary>
+    private ProgramBus _stageBus = ProgramBus.Pgm1;
 
     public MainWindow(
         AppOrchestrator orchestrator,
-        IInputSourceManager sourceManager,
+        IVideoEngine engine,
         AtemController atemController,
         FramePumpService framePump,
-        OutputRouter outputRouter,
-        IHdmiFullscreenOutput hdmiOutput,
-        CompositorEngine compositor,
-        IFullscreenPresenterFactory presenterFactory,
         IDeviceQueryService deviceQueryService,
         AppConfig config,
         ILogger<MainWindow> logger)
@@ -78,29 +95,32 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _orchestrator = orchestrator;
-        _sourceManager = sourceManager;
+        _engine = engine;
         _atemController = atemController;
         _framePump = framePump;
-        _outputRouter = outputRouter;
-        _hdmiOutput = hdmiOutput;
-        _compositor = compositor;
-        _presenterFactory = presenterFactory;
         _deviceQueryService = deviceQueryService;
         _config = config;
         _logger = logger;
         _operatorDisplayIndex = config.OperatorDisplayIndex;
+        _previewBitmaps = new PreviewBitmapCache(framePump);
+
+        _outputs = new OutputTableViewModel(_availableDisplays);
 
         SourceTilesControl.ItemsSource = _tiles;
         MultiviewControl.ItemsSource = _cells;
-        OutputsControl.ItemsSource = _outputRows;
+        OutputsControl.ItemsSource = _outputs.Rows;
+
+        // The add-output picker, the Add button's enabled state and its refusal tooltip all read the
+        // table's capacity, so the routing panel binds against the table itself.
+        OutputRoutingPanel.DataContext = _outputs;
+        AudioOutputsControl.ItemsSource = _audioRows;
         ModulesControl.ItemsSource = _moduleRows;
-        DeviceCombo.ItemsSource = _devices;
+        BusesControl.ItemsSource = _buses;
         OperatorDisplayCombo.ItemsSource = _availableDisplays;
-        MultiviewFullscreenDisplayCombo.ItemsSource = _availableDisplays;
 
         RefreshDisplays();
 
-        foreach (var source in _sourceManager.GetSources())
+        foreach (var source in _engine.GetSources())
         {
             _tiles.Add(new SourceTileViewModel(source));
         }
@@ -108,54 +128,54 @@ public partial class MainWindow : Window
         RefreshAvailableTokensAndIds();
         LoadMultiviewLayout(_orchestrator.CurrentMultiviewLayout);
 
-        foreach (var sink in new[] { OutputSink.Vcam1, OutputSink.Vcam2, OutputSink.Hdmi, OutputSink.Ndi1, OutputSink.Ndi2 })
-        {
-            var row = new OutputAssignmentRowViewModel(sink, _availableDisplays);
-            var current = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == sink);
-            if (current is not null)
-            {
-                row.LoadFrom(current);
-            }
+        // One row per assigned sink rather than one per sink that could exist: the table is whatever the
+        // operator built (falling back to the one-webcam-one-display default on a fresh install), and
+        // rows appear and disappear with the + / × buttons in the dock.
+        _outputs.Load(_engine.CurrentAssignments);
+        _outputs.PropertyChanged += OnOutputTableChanged;
+        OutputCountText.Text = _outputs.Summary;
 
-            _outputRows.Add(row);
-        }
+        RebuildAudioRows();
+        RebuildModuleRows(_orchestrator.CurrentModuleMappings);
 
-        var mappingsByIndex = _orchestrator.CurrentModuleMappings.ToDictionary(m => m.Index);
-        for (var i = 0; i < ProtocolConstants.MaxModules; i++)
-        {
-            var row = new ModuleMappingRowViewModel(i, _availableSourceIds);
-            if (mappingsByIndex.TryGetValue(i, out var existing))
-            {
-                row.LoadFrom(existing);
-            }
-
-            _moduleRows.Add(row);
-        }
-
-        _sourceManager.SourceStatusChanged += OnSourceStatusChanged;
+        _engine.SourceStatusChanged += OnSourceStatusChanged;
+        _engine.SourceRemoved += OnSourceRemoved;
         _atemController.ConnectionStateChanged += OnAtemConnectionStateChanged;
+        _atemController.ProductNameChanged += OnAtemProductNameChanged;
         _orchestrator.TallyChangedV2 += OnTallyChangedV2;
         _orchestrator.MultiviewChanged += OnMultiviewChanged;
+        _orchestrator.ModulesChanged += OnModulesChanged;
+        _orchestrator.TallyColorsChanged += OnTallyColorsChanged;
         _framePump.Tick += OnFramePumpTick;
 
-        AtemStateText.Text = _atemController.State.ToString();
+        TallyPalette.Apply(_orchestrator.CurrentTallyColors);
+        RefreshAtemChip();
 
         SelectOperatorDisplay();
-        NewSourceTypeCombo.SelectedIndex = 0;
+        ApplyStageViewMode(_config.StageViewMode);
         _uiReady = true;
-        OnSourceTypeChanged(this, null!);
+        RefreshBusState();
+
+        PreviewKeyDown += OnConsoleKeyDown;
 
         Loaded += (_, _) => PositionOnDisplay(_operatorDisplayIndex, activate: false);
 
         Unloaded += (_, _) =>
         {
-            _sourceManager.SourceStatusChanged -= OnSourceStatusChanged;
+            _engine.SourceStatusChanged -= OnSourceStatusChanged;
+            _engine.SourceRemoved -= OnSourceRemoved;
             _atemController.ConnectionStateChanged -= OnAtemConnectionStateChanged;
+            _atemController.ProductNameChanged -= OnAtemProductNameChanged;
             _orchestrator.TallyChangedV2 -= OnTallyChangedV2;
             _orchestrator.MultiviewChanged -= OnMultiviewChanged;
+            _orchestrator.ModulesChanged -= OnModulesChanged;
+            _orchestrator.TallyColorsChanged -= OnTallyColorsChanged;
             _framePump.Tick -= OnFramePumpTick;
+            _outputs.PropertyChanged -= OnOutputTableChanged;
         };
     }
+
+    // ── displays ────────────────────────────────────────────────────────────────
 
     private void RefreshDisplays()
     {
@@ -168,13 +188,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SelectOperatorDisplay()
-    {
+    private void SelectOperatorDisplay() =>
         OperatorDisplayCombo.SelectedItem = _availableDisplays.FirstOrDefault(d => d.Index == _operatorDisplayIndex);
-        MultiviewFullscreenDisplayCombo.SelectedItem =
-            _availableDisplays.FirstOrDefault(d => d.Index != _operatorDisplayIndex) ??
-            _availableDisplays.FirstOrDefault();
-    }
+
+    // ── source / token bookkeeping ──────────────────────────────────────────────
 
     private void RefreshAvailableTokensAndIds()
     {
@@ -195,6 +212,12 @@ public partial class MainWindow : Window
                 _availableSourceIds.Add(id);
             }
         }
+
+        SyncTileAudioModes();
+        SourceCountText.Text = _tiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        RebuildMultiviewCells();
+        RefreshBusSources();
+        _multiviewSettings?.ReloadSources();
     }
 
     private void LoadMultiviewLayout(MultiviewLayout layout)
@@ -203,18 +226,28 @@ public partial class MainWindow : Window
         RebuildMultiviewCells();
     }
 
+    /// <summary>Rebuilds the read-only multiview dock from the region model. Unlike the editor in
+    /// <see cref="MultiviewSettingsWindow"/> these cells have no combo boxes, so there is no shared
+    /// ItemsSource to transiently blank and no reentrancy to guard against.</summary>
     private void RebuildMultiviewCells()
     {
-        _suppressMultiviewApply = true;
+        // Set the grid dimensions before the cells: the panel binds through Tag, and reassigning it
+        // after the items would arrange them against the previous grid for a frame.
+        MultiviewControl.Tag = new MultiviewGridSize(_regionModel.Rows, _regionModel.Cols);
+
         _cells.Clear();
         foreach (var region in _regionModel.Regions)
         {
             var token = _availableTokens.Contains(region.Content) ? region.Content : "EMPTY";
-            _cells.Add(new MultiviewCellViewModel(region.Row, region.Col, region.RowSpan, region.ColSpan, token, _availableTokens));
+            var (state, bus) = MultiviewTally.ResolveDetailed(token, _orchestrator);
+            _cells.Add(new MultiviewCellViewModel(region.Row, region.Col, region.RowSpan, region.ColSpan, token, _availableTokens)
+            {
+                Tally = state,
+                TallyBus = bus,
+            });
         }
 
-        _isDraggingSelection = false;
-        _suppressMultiviewApply = false;
+        MultiviewSummaryText.Text = $"{_regionModel.Rows} x {_regionModel.Cols} · {_cells.Count} CELLS";
     }
 
     private void OnSourceStatusChanged(object? sender, SourceInfo info) =>
@@ -233,8 +266,33 @@ public partial class MainWindow : Window
             RefreshAvailableTokensAndIds();
         });
 
+    /// <summary>Drops the tile for a source removed anywhere — including through the Web API, which the
+    /// window otherwise never hears about, leaving a tile whose id no longer exists in the engine.</summary>
+    private void OnSourceRemoved(object? sender, string id) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            var tile = _tiles.FirstOrDefault(t => t.Id == id);
+            if (tile is null)
+            {
+                return;
+            }
+
+            _tiles.Remove(tile);
+            RefreshAvailableTokensAndIds();
+        });
+
     private void OnAtemConnectionStateChanged(object? sender, AtemConnectionState state) =>
-        Dispatcher.BeginInvoke(() => AtemStateText.Text = state.ToString());
+        Dispatcher.BeginInvoke(RefreshAtemChip);
+
+    private void OnAtemProductNameChanged(object? sender, string productName) =>
+        Dispatcher.BeginInvoke(RefreshAtemChip);
+
+    /// <summary>Names the switcher once it has identified itself, so the chip says which ATEM is on the
+    /// other end rather than just that something is.</summary>
+    private void RefreshAtemChip() =>
+        AtemStateText.Text = _atemController.ProductName is { } product
+            ? $"{product} {_atemController.State}"
+            : $"ATEM {_atemController.State}";
 
     private void OnTallyChangedV2(object? sender, TallyStateV2 state) =>
         Dispatcher.BeginInvoke(() =>
@@ -243,150 +301,404 @@ public partial class MainWindow : Window
             ActivePgm2Text.Text = Format(state.ActivePgm2);
             ActivePvw1Text.Text = Format(state.ActivePvw1);
             ActivePvw2Text.Text = Format(state.ActivePvw2);
+
+            // The buses can also be driven from the HID module switches and the Web API, so the docks
+            // follow the published tally rather than only this window's own button presses.
+            RefreshBusState();
         });
 
     private static string Format(IReadOnlyList<int> channels) => channels.Count == 0 ? "-" : string.Join(", ", channels);
 
     private void OnMultiviewChanged(object? sender, MultiviewLayout layout) =>
-        Dispatcher.BeginInvoke(() => LoadMultiviewLayout(layout));
+        Dispatcher.BeginInvoke(() =>
+        {
+            LoadMultiviewLayout(layout);
+
+            // Only forward a layout the editor didn't originate, or reloading it would clobber the
+            // selection the operator is mid-drag on.
+            if (_multiviewSettings is { IsEditing: false } editor)
+            {
+                editor.ReloadLayout(layout);
+            }
+        });
+
+    private void OnModulesChanged(object? sender, IReadOnlyList<ModuleMapping> mappings) =>
+        Dispatcher.BeginInvoke(() => RebuildModuleRows(mappings));
+
+    /// <summary>Republishes the palette into the application resources; every DynamicResource-bound
+    /// surface restyles itself from there.</summary>
+    private void OnTallyColorsChanged(object? sender, TallyColors colors) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            TallyPalette.Apply(colors);
+            RefreshBusState();
+
+            // The audio rows are labelled in their bus colour, and TallyPalette hands out frozen
+            // brushes rather than a live resource, so they have to be re-read here.
+            foreach (var row in _audioRows)
+            {
+                row.RaiseBusBrushChanged();
+            }
+        });
+
+    /// <summary>Rebuilds the Controller dock from the modules the Pico actually reports. A row exists
+    /// only while its module does, so the panel never offers bindings for hardware that is unplugged.</summary>
+    private void RebuildModuleRows(IReadOnlyList<ModuleMapping> mappings)
+    {
+        _moduleRows.Clear();
+        foreach (var mapping in mappings.OrderBy(m => m.Index))
+        {
+            var row = new ModuleMappingRowViewModel(mapping.Index, _availableSourceIds);
+            row.LoadFrom(mapping);
+            _moduleRows.Add(row);
+        }
+
+        NoModulesText.Visibility = _moduleRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ModuleCountText.Text = _moduleRows.Count == 0
+            ? "NOT CONNECTED"
+            : $"{_moduleRows.Count} MODULE{(_moduleRows.Count == 1 ? string.Empty : "S")}";
+    }
+
+    // ── frame pump ──────────────────────────────────────────────────────────────
 
     private void OnFramePumpTick(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(() =>
         {
-            foreach (var cell in _cells)
-            {
-                if (cell.Token == "EMPTY")
-                {
-                    cell.Image = null;
-                    continue;
-                }
+            // One conversion per token per tick, shared with the multiview editor if it is open.
+            _previewBitmaps.BeginTick();
 
-                var frame = _framePump.TryGetCellFrame(cell.Token);
-                if (frame is not { } f)
-                {
-                    continue;
-                }
-
-                _cellBitmaps.TryGetValue(cell.Token, out var bitmap);
-                bitmap = FrameBitmapWriter.Write(bitmap, f);
-                _cellBitmaps[cell.Token] = bitmap;
-                cell.Image = bitmap;
-            }
+            UpdateStageMonitors();
+            RefreshCellPreviews(_cells, _previewBitmaps, _orchestrator);
+            _multiviewSettings?.RefreshPreviews(_previewBitmaps);
+            _mixEditor?.RefreshPreviews(_previewBitmaps);
         });
 
-    // --- Multiview rectangular merge drag (requirement 3) ---
-
-    private void OnMultiviewCellMouseDown(object sender, MouseButtonEventArgs e)
+    /// <summary>Repaints a set of multiview cells: the shared bitmap for each token plus its red/green
+    /// tally frame. Shared with <see cref="MultiviewSettingsWindow"/> so both grids behave identically.</summary>
+    internal static void RefreshCellPreviews(
+        IEnumerable<MultiviewCellViewModel> cells,
+        PreviewBitmapCache bitmaps,
+        AppOrchestrator orchestrator)
     {
-        if (sender is not FrameworkElement { DataContext: MultiviewCellViewModel vm })
+        foreach (var cell in cells)
         {
-            return;
-        }
-
-        _isDraggingSelection = true;
-        foreach (var cell in _cells)
-        {
-            cell.Selected = false;
-        }
-
-        vm.Selected = true;
-    }
-
-    private void OnMultiviewCellMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (!_isDraggingSelection || e.LeftButton != MouseButtonState.Pressed)
-        {
-            return;
-        }
-
-        if (sender is FrameworkElement { DataContext: MultiviewCellViewModel vm })
-        {
-            vm.Selected = true;
+            var (state, bus) = MultiviewTally.ResolveDetailed(cell.Token, orchestrator);
+            cell.Tally = state;
+            cell.TallyBus = bus;
+            cell.Image = cell.Token == "EMPTY" ? null : bitmaps.Get(cell.Token);
         }
     }
 
-    private void OnMultiviewCellMouseUp(object sender, MouseButtonEventArgs e) => _isDraggingSelection = false;
-
-    private void OnMergeSelectedClick(object sender, RoutedEventArgs e)
+    private void UpdateStageMonitors()
     {
-        var cells = new List<(int Row, int Col)>();
-        foreach (var vm in _cells.Where(c => c.Selected))
+        // Both ME rows are visible simultaneously since v3; the Me1/Me2 radio only decides which one
+        // receives the transition bar and keyboard shortcuts.
+        Preview1Image.Source = _previewBitmaps.Get("PVW1");
+        Program1Image.Source = _previewBitmaps.Get("PGM1");
+        Preview2Image.Source = _previewBitmaps.Get("PVW2");
+        Program2Image.Source = _previewBitmaps.Get("PGM2");
+    }
+
+    // ── bus strips ──────────────────────────────────────────────────────────────
+
+    private void RefreshBusSources()
+    {
+        var sources = _tiles
+            .Where(t => t.Id is not null)
+            .Select(t => (Id: t.Id!, t.Name))
+            .ToList();
+
+        foreach (var bus in _buses)
         {
-            for (var r = vm.Row; r < vm.Row + vm.RowSpan; r++)
+            bus.SyncSources(sources);
+        }
+
+        RefreshBusState();
+    }
+
+    /// <summary>Mirrors the orchestrator's authoritative PGM/PVW membership onto the strips, both stage
+    /// captions and the multiview frames — including the toggle states, so a bus driven from the Web API
+    /// or a HID module switch doesn't leave this window describing a staging set that is no longer real.</summary>
+    private void RefreshBusState()
+    {
+        foreach (var bus in _buses)
+        {
+            var program = _orchestrator.GetProgramSourceIds(bus.Bus);
+            var preview = _orchestrator.GetPreviewSourceIds(bus.Bus);
+            bus.SetOnProgram(program);
+            bus.SetStaged(preview);
+            bus.ProgramText = DescribeSources(program);
+            bus.PreviewText = DescribeSources(preview);
+
+            // Both ME rows have their own captions since v3.
+            var programCaption = program.Count == 0
+                ? $"{bus.ProgramLabel} — off air"
+                : $"{bus.ProgramLabel} — {bus.ProgramText}";
+            var previewCaption = preview.Count == 0
+                ? $"{bus.PreviewLabel} — nothing staged"
+                : $"{bus.PreviewLabel} — {bus.PreviewText}";
+
+            if (bus.Bus == ProgramBus.Pgm1)
             {
-                for (var c = vm.Col; c < vm.Col + vm.ColSpan; c++)
-                {
-                    cells.Add((r, c));
-                }
+                Program1Caption.Text = programCaption;
+                Preview1Caption.Text = previewCaption;
+            }
+            else
+            {
+                Program2Caption.Text = programCaption;
+                Preview2Caption.Text = previewCaption;
             }
         }
 
-        if (!_regionModel.TryMerge(cells, out var error))
-        {
-            System.Windows.MessageBox.Show(error, "Multiview merge", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        ApplyMultiviewFromModel();
-    }
-
-    private void OnSplitSelectedClick(object sender, RoutedEventArgs e)
-    {
-        var targets = _cells.Where(c => c.Selected).Select(c => (c.Row, c.Col)).ToList();
-        if (targets.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var (row, col) in targets)
-        {
-            _regionModel.Split(row, col);
-        }
-
-        ApplyMultiviewFromModel();
-    }
-
-    private void OnClearSelectionClick(object sender, RoutedEventArgs e)
-    {
-        _isDraggingSelection = false;
         foreach (var cell in _cells)
         {
-            cell.Selected = false;
+            var (state, bus) = MultiviewTally.ResolveDetailed(cell.Token, _orchestrator);
+            cell.Tally = state;
+            cell.TallyBus = bus;
         }
     }
 
-    private void ApplyMultiviewFromModel()
+    private string DescribeSources(IReadOnlySet<string> ids)
     {
-        var layout = _regionModel.ToLayout();
-        RebuildMultiviewCells();
-        _ = _orchestrator.ApplyMultiviewAsync(layout);
+        if (ids.Count == 0)
+        {
+            return "-";
+        }
+
+        var names = ids
+            .Select(id => _tiles.FirstOrDefault(t => t.Id == id)?.Name ?? id)
+            .OrderBy(n => n, StringComparer.CurrentCulture);
+        return string.Join(", ", names);
     }
 
-    private void OnMultiviewCellSelectionChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>Staging a source is only a PVW change, so it never takes: the layer set is pushed with
+    /// <c>Take: false</c> and only CUT/AUTO moves it to air.</summary>
+    private async void OnBusSourceToggleClick(object sender, RoutedEventArgs e)
     {
-        if (_suppressMultiviewApply || sender is not FrameworkElement { DataContext: MultiviewCellViewModel vm })
+        if (sender is not FrameworkElement element || FindBusFor(element) is not { } bus)
         {
             return;
         }
 
-        _regionModel.SetContent(vm.Row, vm.Col, vm.Token);
-        _ = _orchestrator.ApplyMultiviewAsync(_regionModel.ToLayout());
+        await StagePreviewAsync(bus).ConfigureAwait(true);
     }
 
-    // --- Multiview full-screen (requirement 4) ---
+    private async Task StagePreviewAsync(BusControlViewModel bus)
+    {
+        var layers = bus.StagedSourceIds
+            .Select((id, index) => new ProgramLayer(id, FullFrameLayer(index)))
+            .ToList();
+
+        try
+        {
+            await _orchestrator.ApplyProgramAsync(new ProgramRequest(bus.Bus, layers, Take: false)).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Failed to stage the preview composition for {Bus}.", bus.Bus);
+            System.Windows.MessageBox.Show(ex.Message, "Preview", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        RefreshBusState();
+    }
+
+    private static PipSettings FullFrameLayer(int zOrder) =>
+        new(Enabled: true, X: 0, Y: 0, Width: EngineDefaults.CanvasWidth, Height: EngineDefaults.CanvasHeight,
+            Opacity: 1.0, ZOrder: zOrder, Crop: null);
+
+    private void OnBusCutClick(object sender, RoutedEventArgs e) => _ = TakeBusAsync(FindBusFor((FrameworkElement)sender), 0);
+
+    private void OnBusAutoClick(object sender, RoutedEventArgs e) =>
+        _ = TakeBusAsync(FindBusFor((FrameworkElement)sender), SelectedAutoDurationMs());
+
+    private async Task TakeBusAsync(BusControlViewModel? bus, int durationMs)
+    {
+        if (bus is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _orchestrator.TakeAsync(bus.Bus, durationMs).ConfigureAwait(true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "TAKE failed for {Bus}.", bus.Bus);
+            System.Windows.MessageBox.Show(ex.Message, "Take", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // The engine swapped program<->preview for this bus; RefreshBusState re-reads both sets, so the
+        // toggles now describe what the take left staged (whatever was on air a moment ago).
+        RefreshBusState();
+    }
+
+    private int SelectedAutoDurationMs() =>
+        AutoDurationCombo.SelectedItem is ComboBoxItem { Tag: string tag } &&
+        int.TryParse(tag, out var ms) ? ms : 500;
+
+    /// <summary>Walks up from a control inside one bus template to that bus's view model. The buttons
+    /// live in a nested <c>ItemsControl</c>, so their own DataContext may be a
+    /// <see cref="BusSourceViewModel"/>.</summary>
+    private static BusControlViewModel? FindBusFor(DependencyObject element)
+    {
+        for (var node = element; node is not null; node = System.Windows.Media.VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { DataContext: BusControlViewModel bus })
+            {
+                return bus;
+            }
+        }
+
+        return null;
+    }
+
+    // ── stage (selected M/E) ────────────────────────────────────────────────────
+
+    private void OnStageBusChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady)
+        {
+            return;
+        }
+
+        _stageBus = Me2Radio.IsChecked == true ? ProgramBus.Pgm2 : ProgramBus.Pgm1;
+        RefreshBusState();
+    }
+
+    private BusControlViewModel StageBusViewModel() => _buses.First(b => b.Bus == _stageBus);
+
+    /// <summary>
+    /// Operator keyboard shortcuts for the selected M/E. During a show the hands are on the keyboard and
+    /// a cut has to happen on a beat, so the transition must not require finding a button with the
+    /// mouse: <c>Space</c> cuts, <c>A</c> auto-transitions, <c>1</c>-<c>9</c> stage the n-th source,
+    /// <c>Esc</c> clears the preview and <c>Tab</c> swaps which M/E the monitors follow.
+    ///
+    /// Suppressed while a text box or combo has focus, so typing a source name never fires a take.
+    /// </summary>
+    private void OnConsoleKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (Keyboard.FocusedElement is System.Windows.Controls.TextBox or System.Windows.Controls.ComboBox ||
+            Keyboard.Modifiers is not ModifierKeys.None)
+        {
+            return;
+        }
+
+        var bus = StageBusViewModel();
+
+        switch (e.Key)
+        {
+            case Key.Space:
+                _ = TakeBusAsync(bus, 0);
+                break;
+
+            case Key.A:
+                _ = TakeBusAsync(bus, SelectedAutoDurationMs());
+                break;
+
+            case Key.Escape:
+                OnStageClearClick(this, new RoutedEventArgs());
+                break;
+
+            case Key.Tab:
+                (Me2Radio.IsChecked, Me1Radio.IsChecked) = (Me1Radio.IsChecked, Me2Radio.IsChecked);
+                break;
+
+            case >= Key.D1 and <= Key.D9:
+                ToggleStagedByIndex(bus, e.Key - Key.D1);
+                break;
+
+            default:
+                return;  // leave anything else to the focused control
+        }
+
+        e.Handled = true;
+    }
+
+    private void ToggleStagedByIndex(BusControlViewModel bus, int index)
+    {
+        if (index < 0 || index >= bus.Sources.Count)
+        {
+            return;
+        }
+
+        var source = bus.Sources[index];
+        source.Staged = !source.Staged;
+        _ = StagePreviewAsync(bus);
+    }
+
+    private void OnStageCutClick(object sender, RoutedEventArgs e) => _ = TakeBusAsync(StageBusViewModel(), 0);
+
+    private void OnStageAutoClick(object sender, RoutedEventArgs e) =>
+        _ = TakeBusAsync(StageBusViewModel(), SelectedAutoDurationMs());
+
+    private async void OnStageClearClick(object sender, RoutedEventArgs e)
+    {
+        var bus = StageBusViewModel();
+        foreach (var source in bus.Sources)
+        {
+            source.Staged = false;
+        }
+
+        await StagePreviewAsync(bus).ConfigureAwait(true);
+    }
+
+    /// <summary>Stages an empty composition and takes it: the operator's "get this bus off air" panic
+    /// button, which the transition bar otherwise has no single-click path to.</summary>
+    private async void OnStageAllOffClick(object sender, RoutedEventArgs e)
+    {
+        var bus = StageBusViewModel();
+        foreach (var source in bus.Sources)
+        {
+            source.Staged = false;
+        }
+
+        try
+        {
+            await _orchestrator.ApplyProgramAsync(new ProgramRequest(bus.Bus, [], Take: true)).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Failed to clear {Bus}.", bus.Bus);
+        }
+
+        RefreshBusState();
+    }
+
+    // ── multiview ───────────────────────────────────────────────────────────────
+
+    private void OnOpenMultiviewSettingsClick(object sender, RoutedEventArgs e)
+    {
+        if (_multiviewSettings is not null)
+        {
+            _multiviewSettings.Activate();
+            return;
+        }
+
+        RefreshDisplays();
+        _multiviewSettings = new MultiviewSettingsWindow(
+            _orchestrator, _engine, [.. _availableDisplays], OpenMultiviewFullscreen)
+        {
+            Owner = this,
+        };
+        _multiviewSettings.Closed += (_, _) => _multiviewSettings = null;
+        _multiviewSettings.Show();
+    }
 
     private void OnMultiviewFullscreenClick(object sender, RoutedEventArgs e)
     {
-        if (MultiviewFullscreenDisplayCombo.SelectedItem is not DisplayOption display)
+        // Default to a display that isn't the console, which is what the operator means every time.
+        var target = _availableDisplays.FirstOrDefault(d => d.Index != _operatorDisplayIndex)
+            ?? _availableDisplays.FirstOrDefault();
+        if (target is not null)
         {
-            return;
+            OpenMultiviewFullscreen(target.Index);
         }
-
-        OpenMultiviewFullscreen(display.Index);
     }
 
     /// <summary>Opens (or re-opens) the independent multiview full-screen window on the given display,
-    /// after the same-screen warning if it targets the operator console (requirement 4).</summary>
+    /// after the same-screen warning if it targets the operator console.</summary>
     public void OpenMultiviewFullscreen(int displayIndex)
     {
         if (!ConfirmDisplayConflict(displayIndex))
@@ -396,16 +708,76 @@ public partial class MainWindow : Window
 
         _multiviewFullscreen?.Close();
         _multiviewFullscreen = new MultiviewFullscreenWindow(
-            _presenterFactory,
-            _compositor,
-            _framePump,
+            _engine,
             () => _regionModel.ToLayout(),
             displayIndex);
         _multiviewFullscreen.Closed += (_, _) => _multiviewFullscreen = null;
         _multiviewFullscreen.ShowFullscreen();
     }
 
-    // --- Operator display move (requirement 2) ---
+    // ── stage view preference ──────────────────────────────────────────────────
+
+    /// <summary>Menu-driven radio: "Both / ME1 only / ME2 only". IsCheckable=True lets the item show a
+    /// tick when it is the active mode; we untick the siblings ourselves since WPF has no built-in
+    /// radio semantics for menu items.</summary>
+    private void OnStageViewChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string tag } || !Enum.TryParse<StageViewMode>(tag, out var mode))
+        {
+            return;
+        }
+
+        // A second click on the already-active item would otherwise uncheck it and leave no mode
+        // selected. Snap it back on and stop.
+        if (mode == _config.StageViewMode)
+        {
+            SyncStageViewMenu(mode);
+            return;
+        }
+
+        ApplyStageViewMode(mode);
+        _config = _config with { StageViewMode = mode };
+        AppConfigLoader.Save(AppContext.BaseDirectory, _config, _logger);
+    }
+
+    /// <summary>Resizes the stage rows and re-syncs the menu ticks. Called at startup with the persisted
+    /// value and after every operator selection.</summary>
+    private void ApplyStageViewMode(StageViewMode mode)
+    {
+        // Star rows for what should be visible, zero for what should not. Collapsing the splitter row
+        // too keeps a 6px seam from staying visible when only one ME is showing.
+        var star = new GridLength(1, GridUnitType.Star);
+        var zero = new GridLength(0);
+        switch (mode)
+        {
+            case StageViewMode.Me1Only:
+                StageMe1Row.Height = star;
+                StageSplitterRow.Height = zero;
+                StageMe2Row.Height = zero;
+                break;
+            case StageViewMode.Me2Only:
+                StageMe1Row.Height = zero;
+                StageSplitterRow.Height = zero;
+                StageMe2Row.Height = star;
+                break;
+            default:  // Both
+                StageMe1Row.Height = star;
+                StageSplitterRow.Height = new GridLength(6);
+                StageMe2Row.Height = star;
+                break;
+        }
+
+        SyncStageViewMenu(mode);
+    }
+
+    private void SyncStageViewMenu(StageViewMode mode)
+    {
+        StageViewBothItem.IsChecked = mode == StageViewMode.Both;
+        StageViewMe1Item.IsChecked = mode == StageViewMode.Me1Only;
+        StageViewMe2Item.IsChecked = mode == StageViewMode.Me2Only;
+    }
+
+    // ── operator display ────────────────────────────────────────────────────────
 
     private void OnMoveOperatorClick(object sender, RoutedEventArgs e)
     {
@@ -415,13 +787,14 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Moves the operator console to the given display and persists the choice (requirement 2).</summary>
+    /// <summary>Moves the operator console to the given display and persists the choice.</summary>
     public void MoveOperatorToDisplay(int displayIndex)
     {
         _operatorDisplayIndex = displayIndex;
         PositionOnDisplay(displayIndex, activate: true);
         SelectOperatorDisplay();
-        AppConfigLoader.Save(AppContext.BaseDirectory, _config with { OperatorDisplayIndex = displayIndex }, _logger);
+        _config = _config with { OperatorDisplayIndex = displayIndex };
+        AppConfigLoader.Save(AppContext.BaseDirectory, _config, _logger);
     }
 
     private void PositionOnDisplay(int displayIndex, bool activate)
@@ -462,164 +835,71 @@ public partial class MainWindow : Window
         return result == MessageBoxResult.OK;
     }
 
-    // --- Source add (requirement 6/7) ---
+    // ── ATEM ────────────────────────────────────────────────────────────────────
 
-    private void OnSourceTypeChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>Opens the ATEM setup window (pick a switcher, assign its PGM/PVW to module switches,
+    /// route its ON AIR output back in). Modeless like the multiview editor: an operator setting the
+    /// ATEM up wants to watch the program monitors react while doing it.</summary>
+    private void OnOpenAtemSettingsClick(object sender, RoutedEventArgs e)
     {
-        if (!_uiReady)
+        if (_atemSettings is { } existing)
         {
+            existing.Activate();
             return;
         }
 
-        var type = SelectedSourceTypeText();
-        var isSrt = type == "SRT";
-        DeviceSelectPanel.Visibility = isSrt ? Visibility.Collapsed : Visibility.Visible;
-        SrtPanel.Visibility = isSrt ? Visibility.Visible : Visibility.Collapsed;
-
-        if (isSrt)
+        var window = new AtemSettingsWindow(_orchestrator, _atemController, _deviceQueryService, _config, _logger)
         {
-            _ = LoadSrtSetupAsync();
-        }
-        else
-        {
-            _ = RescanDevicesAsync();
-        }
-    }
-
-    private void OnRescanDevicesClick(object sender, RoutedEventArgs e) => _ = RescanDevicesAsync();
-
-    private async Task RescanDevicesAsync()
-    {
-        var queryType = SelectedDeviceQueryType();
-        if (queryType is not { } type)
-        {
-            return;
-        }
-
-        IReadOnlyList<DeviceInfo> devices;
-        try
-        {
-            devices = await _deviceQueryService.EnumerateAsync(type).ConfigureAwait(true);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Device enumeration failed for {Type}.", type);
-            devices = Array.Empty<DeviceInfo>();
-        }
-
-        _devices.Clear();
-        foreach (var device in devices)
-        {
-            _devices.Add(device);
-        }
-
-        NoDevicesText.Visibility = _devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (_devices.Count > 0)
-        {
-            DeviceCombo.SelectedIndex = 0;
-        }
-    }
-
-    private async Task LoadSrtSetupAsync()
-    {
-        SrtSetupInfo info;
-        try
-        {
-            info = await _deviceQueryService.GetSrtSetupAsync().ConfigureAwait(true);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "SRT setup lookup failed.");
-            return;
-        }
-
-        _lastSrtSetup = info;
-        SrtSetupText.Text = info.InstructionsText;
-        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
-        SrtHostsList.ItemsSource = info.HostCandidates;
-        SrtLatencyBox.Text = info.RecommendedLatencyMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        SrtAtemText.Text =
-            $"ATEM Mini host: {_config.AtemIp}. Set the ATEM's streaming output to Caller and enter the URL above.";
-    }
-
-    private void OnUseRecommendedSrtUrlClick(object sender, RoutedEventArgs e)
-    {
-        if (_lastSrtSetup is { } setup)
-        {
-            SrtUrlBox.Text = setup.RecommendedUrl;
-        }
-    }
-
-    private async void OnAddSourceClick(object sender, RoutedEventArgs e)
-    {
-        var name = NewSourceNameBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return;
-        }
-
-        var type = SelectedSourceTypeText();
-        var id = GenerateId(name);
-        SourceDefinition? definition = type switch
-        {
-            "WEBCAM" => DeviceCombo.SelectedItem is DeviceInfo webcam
-                ? new SourceDefinition(id, name, SourceType.Webcam, null, new WebcamConfig(webcam.Id, webcam.Formats?.FirstOrDefault()), null)
-                : null,
-            "NDI" => DeviceCombo.SelectedItem is DeviceInfo ndi
-                ? new SourceDefinition(id, name, SourceType.Ndi, new NdiConfig(ndi.Id), null, null)
-                : null,
-            "SRT" => BuildSrtDefinition(id, name),
-            _ => null,
+            Owner = this,
         };
 
-        if (definition is null)
+        window.Closed += (_, _) => _atemSettings = null;
+        _atemSettings = window;
+        window.Show();
+    }
+
+    // ── add source ──────────────────────────────────────────────────────────────
+
+    /// <summary>Opens the modal add-source dialog (both the toolbar's "+ Add source" and the Sources
+    /// dock's "+" land here). Extracted from an overlay panel in v3 so the source list stays visible
+    /// while the operator is filling the form in.</summary>
+    private async void OnOpenAddSourceClick(object sender, RoutedEventArgs e)
+    {
+        if (_addSourceWindow is { } existing)
         {
-            System.Windows.MessageBox.Show("Select a device (or enter an SRT URL) before adding the source.", "Add source", MessageBoxButton.OK, MessageBoxImage.Information);
+            existing.Activate();
             return;
         }
 
-        await _orchestrator.AddSourceAsync(definition).ConfigureAwait(true);
-        RefreshAvailableTokensAndIds();
-        NewSourceNameBox.Clear();
-    }
-
-    private SourceDefinition? BuildSrtDefinition(string id, string name)
-    {
-        var url = SrtUrlBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(url))
+        var window = new AddSourceWindow(_deviceQueryService, _orchestrator, _logger) { Owner = this };
+        _addSourceWindow = window;
+        try
         {
-            return null;
+            if (window.ShowDialog() != true || window.Result is not { } definition)
+            {
+                return;
+            }
+
+            try
+            {
+                await _orchestrator.AddSourceAsync(definition).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                // The engine rejects a source it cannot create natively (e.g. an NDI source with DistroAV
+                // absent). Without this catch the exception escapes an async void handler and takes the
+                // whole app down instead of telling the operator what to install.
+                _logger.LogWarning(ex, "Adding source {SourceId} failed.", definition.Id);
+                System.Windows.MessageBox.Show(ex.Message, "Add source", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            RefreshAvailableTokensAndIds();
         }
-
-        var latency = int.TryParse(SrtLatencyBox.Text, out var parsed) ? parsed : DeviceQueryDefaultLatencyMs;
-        return new SourceDefinition(id, name, SourceType.Srt, null, null, new SrtConfig(url, latency));
-    }
-
-    private const int DeviceQueryDefaultLatencyMs = 40;
-
-    private string SelectedSourceTypeText() =>
-        (NewSourceTypeCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "WEBCAM";
-
-    private DeviceQueryType? SelectedDeviceQueryType() => SelectedSourceTypeText() switch
-    {
-        "WEBCAM" => DeviceQueryType.Webcam,
-        "NDI" => DeviceQueryType.Ndi,
-        _ => null,
-    };
-
-    private static string GenerateId(string name)
-    {
-        var slug = new string([.. name.Where(char.IsLetterOrDigit)]).ToLowerInvariant();
-        if (slug.Length == 0)
+        finally
         {
-            slug = "src";
+            _addSourceWindow = null;
         }
-        else if (slug.Length > 16)
-        {
-            slug = slug[..16];
-        }
-
-        return $"{slug}-{Guid.NewGuid():N}"[..(slug.Length + 9)];
     }
 
     private async void OnRemoveSourceClick(object sender, RoutedEventArgs e)
@@ -629,7 +909,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        await _orchestrator.RemoveSourceAsync(id).ConfigureAwait(true);
+        try
+        {
+            await _orchestrator.RemoveSourceAsync(id).ConfigureAwait(true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Removing source {SourceId} failed.", id);
+            System.Windows.MessageBox.Show(ex.Message, "Remove source", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
 
         var tile = _tiles.FirstOrDefault(t => t.Id == id);
         if (tile is not null)
@@ -640,17 +929,196 @@ public partial class MainWindow : Window
         RefreshAvailableTokensAndIds();
     }
 
-    // --- Outputs (requirement 1/5) ---
-
-    private async void OnApplyOutputsClick(object sender, RoutedEventArgs e)
+    /// <summary>Opens the tally palette editor. The same values light the module LEDs, so applying
+    /// re-lights the controller immediately.</summary>
+    private async void OnTallyColorsClick(object sender, RoutedEventArgs e)
     {
-        var hdmi = _outputRows.FirstOrDefault(r => r.IsHdmi);
-        if (hdmi is not null && !ConfirmDisplayConflict(hdmi.DisplayId))
+        var editor = new TallyColorsWindow(_orchestrator.CurrentTallyColors) { Owner = this };
+        if (editor.ShowDialog() == true && editor.Result is { } colors)
         {
+            await _orchestrator.ApplyTallyColorsAsync(colors).ConfigureAwait(true);
+        }
+    }
+
+    // ── mix sources ─────────────────────────────────────────────────────────────
+
+    private void OnNewMixClick(object sender, RoutedEventArgs e) => OpenMixEditor(null);
+
+    private void OnEditMixClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: string id })
+        {
+            OpenMixEditor(id);
+        }
+    }
+
+    /// <summary>
+    /// Opens the mix editor for a new mix, or for <paramref name="mixId"/> to change an existing one.
+    /// The mix itself is excluded from the layer choices so it can never contain itself.
+    /// </summary>
+    private async void OpenMixEditor(string? mixId)
+    {
+        var existing = mixId is null ? null : _orchestrator.GetSourceDefinition(mixId);
+        if (mixId is not null && existing?.Mix is null)
+        {
+            System.Windows.MessageBox.Show(
+                "This source isn't a mix, or it was created outside this window so its layers aren't known.",
+                "Mix source", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        var request = new OutputsRequest(_outputRows.Select(r => r.ToOutputAssignment()).ToList());
+        var available = _tiles
+            .Where(t => t.Id is not null && t.Id != mixId)
+            .Select(t => (Id: t.Id!, t.Name))
+            .ToList();
+
+        if (available.Count == 0)
+        {
+            System.Windows.MessageBox.Show(
+                "Add at least one source before building a mix.",
+                "Mix source", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var editor = new MixSourceWindow(existing, SuggestMixName(), available) { Owner = this };
+        _mixEditor = editor;
+        try
+        {
+            if (editor.ShowDialog() != true || editor.Result is not { } mix)
+            {
+                return;
+            }
+
+            var id = mixId ?? AddSourceWindow.GenerateId(editor.MixName);
+            var definition = new SourceDefinition(
+                id, editor.MixName, SourceType.Mix, null, null, null, null, null, mix);
+
+            if (mixId is null)
+            {
+                await _orchestrator.AddSourceAsync(definition).ConfigureAwait(true);
+            }
+            else
+            {
+                await _orchestrator.UpdateSourceAsync(mixId, definition).ConfigureAwait(true);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Saving mix source failed.");
+            System.Windows.MessageBox.Show(ex.Message, "Mix source", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _mixEditor = null;
+        }
+
+        RefreshAvailableTokensAndIds();
+    }
+
+    private string SuggestMixName()
+    {
+        var used = _tiles.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var n = 1; ; n++)
+        {
+            var candidate = $"Mix {n}";
+            if (used.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    /// <summary>Re-applies a source's definition so libobs re-opens the device — the recovery path for a
+    /// capture device that was busy or unplugged when the source was first created.</summary>
+    private async void OnReconnectSourceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: string id })
+        {
+            await ReconnectAsync(id).ConfigureAwait(true);
+        }
+    }
+
+    private async void OnReconnectAllClick(object sender, RoutedEventArgs e)
+    {
+        foreach (var id in _tiles.Where(t => t.Status != SourceStatus.Connected && t.Id is not null).Select(t => t.Id!).ToList())
+        {
+            await ReconnectAsync(id).ConfigureAwait(true);
+        }
+    }
+
+    private async Task ReconnectAsync(string id)
+    {
+        try
+        {
+            if (!await _orchestrator.ReconnectSourceAsync(id).ConfigureAwait(true))
+            {
+                System.Windows.MessageBox.Show(
+                    "This source was created outside the Add-Source form, so its device settings are not " +
+                    "known. Remove it and add it again.",
+                    "Reconnect", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Reconnecting source {SourceId} failed.", id);
+            System.Windows.MessageBox.Show(ex.Message, "Reconnect", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    // ── outputs / modules / projector ───────────────────────────────────────────
+
+    /// <summary>Mirrors the table's capacity into the dock header ("4/6 SINKS") as rows come and go.
+    /// The Add button's own state is bound; only the header sits outside the routing panel's
+    /// DataContext.</summary>
+    private void OnOutputTableChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) =>
+        OutputCountText.Text = _outputs.Summary;
+
+    /// <summary>Adds a sink of the kind chosen in the picker. The button is disabled at the ceilings, so
+    /// a refusal here means the click raced the state (or the table was loaded over-limit from a
+    /// hand-edited config) — say which ceiling rather than doing nothing.</summary>
+    private void OnAddOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (_outputs.Add() is null)
+        {
+            System.Windows.MessageBox.Show(
+                _outputs.AddRefusalReason ?? "No more outputs can be added.",
+                "Add output", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    /// <summary>Drops a row from the table. Nothing changes on the engine until Apply — the same as
+    /// every other edit in this dock — so a mis-click is undone by re-adding the sink rather than by
+    /// having taken an output off air.</summary>
+    private void OnRemoveOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: OutputAssignmentRowViewModel row })
+        {
+            _outputs.Remove(row);
+        }
+    }
+
+    private async void OnApplyOutputsClick(object sender, RoutedEventArgs e)
+    {
+        // Same rules the Web API validator applies, in the same wording: a table over the ceilings or
+        // with a program bus going nowhere is refused here rather than half-applied by the engine.
+        if (_outputs.Validate() is { Count: > 0 } errors)
+        {
+            System.Windows.MessageBox.Show(
+                string.Join("\n\n", errors), "Apply outputs", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // One warning per display an HDMI sink targets, not per row: several sinks may share a display
+        // id, and the operator only needs telling once that it is the console's own screen.
+        foreach (var displayId in _outputs.Rows.Where(r => r.IsHdmi).Select(r => r.DisplayId).Distinct())
+        {
+            if (!ConfirmDisplayConflict(displayId))
+            {
+                return;
+            }
+        }
+
+        var request = _outputs.ToRequest();
         try
         {
             await _orchestrator.ApplyOutputsAsync(request).ConfigureAwait(true);
@@ -658,6 +1126,160 @@ public partial class MainWindow : Window
         catch (ArgumentException ex)
         {
             System.Windows.MessageBox.Show(ex.Message, "Apply outputs", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // A projector whose sink the operator just removed is now presenting an output that no longer
+        // exists; close it rather than leave a stale full-screen window covering a monitor.
+        CloseProjectorsForUnassignedSinks();
+
+        // An accepted assignment is not a working one: NDI needs the NDI runtime installed, and the
+        // virtual camera can be held by another application. Say so rather than let a bus go dark.
+        if (_orchestrator.BusesWithoutRunningOutput() is { Count: > 0 } dead)
+        {
+            System.Windows.MessageBox.Show(
+                $"{string.Join(" and ", dead)} has outputs assigned but none of them started.\n\n"
+                + "NDI sinks need the NDI runtime (NDI Tools) installed, and the virtual camera "
+                + "cannot start while another application is using it. An HDMI sink counts as running "
+                + "once its full-screen window is open.",
+                "Apply outputs", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    // ── audio ───────────────────────────────────────────────────────────────────
+
+    private IReadOnlyList<AudioDeviceInfo> QueryAudioDevicesOrEmpty()
+    {
+        try
+        {
+            return _orchestrator.QueryAudioDevices();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Enumeration needs the engine; before it starts there is simply nothing to offer.
+            _logger.LogDebug(ex, "Audio devices unavailable");
+            return [];
+        }
+    }
+
+    /// <summary>Rebuilds the audio rows from the saved routing: one row per assignment, plus an empty
+    /// row for a bus that has none. A bus may legitimately feed several devices (house PA and a
+    /// recorder), so the rows follow the saved table rather than being fixed at one per bus — otherwise
+    /// pressing Apply would silently drop the extras.</summary>
+    private void RebuildAudioRows()
+    {
+        var devices = QueryAudioDevicesOrEmpty();
+        var saved = _orchestrator.CurrentAudioOutputs;
+
+        _audioRows.Clear();
+        foreach (var bus in new[] { ProgramBus.Pgm1, ProgramBus.Pgm2 })
+        {
+            var forBus = saved.Where(a => a.Bus == bus).ToList();
+            if (forBus.Count == 0)
+            {
+                _audioRows.Add(NewAudioRow(bus, devices, deviceId: null));
+                continue;
+            }
+
+            foreach (var assignment in forBus)
+            {
+                _audioRows.Add(NewAudioRow(bus, devices, assignment.DeviceId));
+            }
+        }
+    }
+
+    private static AudioOutputRowViewModel NewAudioRow(
+        ProgramBus bus, IReadOnlyList<AudioDeviceInfo> devices, string? deviceId)
+    {
+        var row = new AudioOutputRowViewModel(bus);
+        row.SyncDevices(devices);
+        if (deviceId is not null)
+        {
+            row.Select(deviceId);
+        }
+
+        return row;
+    }
+
+    /// <summary>Re-reads the machine's audio endpoints, keeping each row's choice where the device is
+    /// still there. An interface may be plugged in mid-show.</summary>
+    private void OnRescanAudioClick(object sender, RoutedEventArgs e)
+    {
+        var devices = QueryAudioDevicesOrEmpty();
+        foreach (var row in _audioRows)
+        {
+            row.SyncDevices(devices);
+        }
+    }
+
+    private void OnAddAudioRowClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: string tag }
+            && Enum.TryParse<ProgramBus>(tag, out var bus))
+        {
+            _audioRows.Add(NewAudioRow(bus, QueryAudioDevicesOrEmpty(), deviceId: null));
+        }
+    }
+
+    private void OnRemoveAudioRowClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: AudioOutputRowViewModel row })
+        {
+            _audioRows.Remove(row);
+        }
+    }
+
+    private async void OnApplyAudioClick(object sender, RoutedEventArgs e)
+    {
+        var outputs = _audioRows.Select(r => r.ToAssignment()).OfType<AudioOutputAssignment>().ToList();
+        try
+        {
+            await _orchestrator.ApplyAudioOutputsAsync(new AudioOutputsRequest(outputs)).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "Apply audio", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>Pushes an AFV/ON/OFF change back to the orchestrator, which owns the policy. The combo
+    /// also fires while the rows are being populated, so a selection matching the stored definition is
+    /// treated as an echo and ignored.</summary>
+    private async void OnSourceAudioModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady
+            || sender is not System.Windows.Controls.ComboBox { Tag: string id, SelectedItem: SourceAudioMode mode })
+        {
+            return;
+        }
+
+        var definition = _orchestrator.GetSourceDefinition(id);
+        if (definition is null || definition.AudioMode == mode)
+        {
+            return;
+        }
+
+        try
+        {
+            await _orchestrator.UpdateSourceAsync(id, definition with { AudioMode = mode }).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "Audio mode", MessageBoxButton.OK, MessageBoxImage.Warning);
+            SyncTileAudioModes();
+        }
+    }
+
+    /// <summary>Copies each source's stored audio mode onto its tile. Tiles are built from
+    /// <see cref="SourceInfo"/>, which carries only what the engine reports about the signal.</summary>
+    private void SyncTileAudioModes()
+    {
+        foreach (var tile in _tiles)
+        {
+            if (tile.Id is { } id && _orchestrator.GetSourceDefinition(id) is { } definition)
+            {
+                tile.AudioMode = definition.AudioMode;
+            }
         }
     }
 
@@ -667,14 +1289,85 @@ public partial class MainWindow : Window
         await _orchestrator.ApplyModulesAsync(request).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Opens a projector for every HDMI sink in the applied routing. There can now be up to
+    /// <see cref="OutputCatalog.MaxSinksPerKind"/> of them, each on its own display, and the menu/toolbar verb
+    /// is "show my displays" — an operator who wants only one opens it from that row's own Project
+    /// button. Already-open projectors are simply re-shown, so this doubles as "put them all back on top".
+    /// </summary>
     private void OnOpenProjectorClick(object sender, RoutedEventArgs e)
     {
-        if (_projectorWindow is null)
+        var sinks = _engine.CurrentAssignments
+            .Where(a => OutputCatalog.KindOf(a.Sink) == OutputKind.Hdmi)
+            .Select(a => a.Sink)
+            .OrderBy(OutputCatalog.OrdinalOf)
+            .ToList();
+
+        if (sinks.Count == 0)
         {
-            _projectorWindow = new ProjectorWindow(_hdmiOutput, _outputRouter, _config);
-            _projectorWindow.Closed += (_, _) => _projectorWindow = null;
+            System.Windows.MessageBox.Show(
+                "No HDMI output is routed. Add an HDMI output in the Outputs dock and press "
+                + "\"Apply output routing\" first.",
+                "Open projector", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
 
-        _projectorWindow.ShowOnConfiguredDisplay();
+        foreach (var sink in sinks)
+        {
+            OpenProjector(sink);
+        }
+    }
+
+    /// <summary>Opens the projector for one HDMI row (its "Project" button).</summary>
+    private void OnProjectOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: OutputAssignmentRowViewModel row })
+        {
+            OpenProjector(row.Sink);
+        }
+    }
+
+    /// <summary>
+    /// Shows (or re-shows) the projector presenting <paramref name="sink"/>. Keyed by sink so each HDMI
+    /// output owns one window: the engine attaches them under separate <c>HDMI&lt;n&gt;</c> targets, and
+    /// re-using a single window would mean the second display simply never appears.
+    ///
+    /// A row that has not been applied yet is not in <see cref="IVideoEngine.CurrentAssignments"/>, so
+    /// the engine has no bus to render into it — say that instead of opening a black full-screen window
+    /// on top of whatever the sub-operator is looking at.
+    /// </summary>
+    private void OpenProjector(OutputSink sink)
+    {
+        if (!_engine.CurrentAssignments.Any(a => a.Sink == sink))
+        {
+            System.Windows.MessageBox.Show(
+                $"{OutputCatalog.LabelOf(OutputCatalog.KindOf(sink))} {OutputCatalog.OrdinalOf(sink)} is not "
+                + "routed yet. Press \"Apply output routing\" first.",
+                "Open projector", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!_projectorWindows.TryGetValue(sink, out var window))
+        {
+            window = new ProjectorWindow(sink, _engine, _config);
+            _projectorWindows[sink] = window;
+            window.Closed += (_, _) => _projectorWindows.Remove(sink);
+        }
+
+        window.ShowOnConfiguredDisplay();
+    }
+
+    private void CloseProjectorsForUnassignedSinks()
+    {
+        var assigned = _engine.CurrentAssignments.Select(a => a.Sink).ToHashSet();
+
+        // Closing removes the entry through the window's Closed handler, so iterate a copy.
+        foreach (var (sink, window) in _projectorWindows.ToList())
+        {
+            if (!assigned.Contains(sink))
+            {
+                window.Close();
+            }
+        }
     }
 }

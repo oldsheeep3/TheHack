@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
+using Switcher.App.Orchestration;
 using Switcher.Atem;
+using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Web;
 
@@ -19,6 +21,8 @@ namespace Switcher.App.Services;
 /// </summary>
 public sealed class AppHostService
 {
+    private readonly IVideoEngine _engine;
+    private readonly AppOrchestrator _orchestrator;
     private readonly WebHost _webHost;
     private readonly AtemController _atemController;
     private readonly HidInputService _hidInputService;
@@ -28,6 +32,8 @@ public sealed class AppHostService
     private readonly ILogger<AppHostService> _logger;
 
     public AppHostService(
+        IVideoEngine engine,
+        AppOrchestrator orchestrator,
         WebHost webHost,
         AtemController atemController,
         HidInputService hidInputService,
@@ -36,6 +42,8 @@ public sealed class AppHostService
         AppConfig config,
         ILogger<AppHostService> logger)
     {
+        _engine = engine;
+        _orchestrator = orchestrator;
         _webHost = webHost;
         _atemController = atemController;
         _hidInputService = hidInputService;
@@ -47,8 +55,24 @@ public sealed class AppHostService
 
     public async Task StartAsync()
     {
-        _logger.LogInformation("Starting Switcher.App: connecting ATEM client to {AtemIp}.", _config.AtemIp);
-        _atemController.Connect(_config.AtemIp);
+        _logger.LogInformation("Starting Switcher.App: booting video engine.");
+
+        // Resolve the installed OBS runtime and feed libobs its core data / plugin paths. Without the core
+        // data path the native engine's obs_reset_video fails ("Native switcher-engine failed to start").
+        var engineOptions = ObsRuntime.Configure(new EngineOptions(), _config.ObsInstallPath, _logger);
+        await _engine.StartAsync(engineOptions).ConfigureAwait(false);
+
+        // Replay persisted state now that the engine's native context exists (the orchestrator was
+        // constructed during DI build, before the engine started, so it defers this from its ctor).
+        // Sources/multiview must be restored before MainWindow is constructed - it seeds its tiles and
+        // multiview cells from the engine and the orchestrator's layout.
+        _orchestrator.RestorePersistedOutputs();
+        _orchestrator.RestorePersistedSources();
+        _orchestrator.RestorePersistedAudio();
+
+        // Which ATEM (if any) to dial is the operator's persisted choice from the ATEM settings window,
+        // not a build-time constant - so the orchestrator owns the decision.
+        _orchestrator.ConnectConfiguredAtem();
 
         try
         {
@@ -80,5 +104,6 @@ public sealed class AppHostService
         _hidBacklightService.Stop();
         _hidInputService.Stop();
         _atemController.Dispose();
+        await _engine.StopAsync().ConfigureAwait(false);
     }
 }

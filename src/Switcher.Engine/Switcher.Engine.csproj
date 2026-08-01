@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- P/Invoke into the native switcher-engine (libobs). The DLL is a separate CMake build and is
+         only present at runtime on Windows + OBS; this managed assembly compiles anywhere. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Switcher.Contracts\Switcher.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

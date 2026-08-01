@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATEM 連携 — Switcher</title>
+<meta name="description" content="ATEM Mini との連携。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark"></span> Switcher</a>
+    <nav class="site-nav" aria-label="サイト">
+      <a href="index.html">ホーム</a>
+      <a href="features.html">機能</a>
+      <a href="guide.html">使い方</a>
+      <a href="hardware.html" data-soon>ハードウェア</a>
+      <a href="atem.html" data-soon>ATEM 連携</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">ATEM</p>
+      <h1>ATEM 連携 <span class="pill is-soon">準備中</span></h1>
+      <p class="lede">Blackmagic ATEM Mini との連携について。ページは準備中ですが、現行アプリ側の対応状況を先に記載します。</p>
+    </div>
+  </div>
+  <section>
+    <div class="wrap">
+      <div class="note">
+        <p><strong>ATEM Mini は 2 つの役割で使えます。</strong>1 つは映像の<em>入力</em>元
+        （SRT や NDI 経由で ATEM のプログラム出力を受ける）。もう 1 つは<em>遠隔操作できる外部
+        スイッチャー</em>として、Switcher 側の操作を ATEM のコマンドへ中継することです。</p>
+      </div>
+
+      <div class="section-head" style="margin-top:36px">
+        <h2>現在対応していること</h2>
+      </div>
+      <div class="grid grid-2">
+        <article class="card">
+          <span class="tag">Relay</span>
+          <h3>操作を ATEM コマンドへ中継</h3>
+          <p>物理モジュールのスイッチや Web からの操作を、ATEM の Program / Preview 切替や
+          Cut / Auto へ写像して送出します。写像はアプリ側で設定します。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Direct</span>
+          <h3>コマンドの直接送信</h3>
+          <p>API から任意の ATEM コマンド（アクション・M/E・入力番号）を 1 発送れます。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Status</span>
+          <h3>接続状態の表示</h3>
+          <p>コンソール上部に ATEM の接続状態を常時表示します。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Isolation</span>
+          <h3>落ちても止まらない</h3>
+          <p>ATEM が未接続・切断されていても、Switcher 本体の動作には影響しません。</p>
+        </article>
+      </div>
+
+      <div class="note" style="margin-top:28px">
+        <p><strong>このページには今後、</strong>接続手順・入力としての受け方（SRT / NDI）・
+        ボタン写像の設定例・想定する配線図を掲載する予定です。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Switcher — 2026-Team-38</span>
+    <span class="spacer"></span>
+    <a href="index.html">ホーム</a>
+    <a href="features.html">機能</a>
+    <a href="guide.html">使い方</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -21,10 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Switcher.Contracts\Switcher.Contracts.csproj" />
-    <ProjectReference Include="..\..\src\Switcher.Media\Switcher.Media.csproj" />
+    <ProjectReference Include="..\..\src\Switcher.Engine\Switcher.Engine.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Web\Switcher.Web.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Atem\Switcher.Atem.csproj" />
-    <ProjectReference Include="..\..\src\Switcher.VirtualCam\Switcher.VirtualCam.csproj" />
     <ProjectReference Include="..\..\src\Switcher.Hid\Switcher.Hid.csproj" />
   </ItemGroup>
 
@@ -36,7 +35,12 @@
     dependency of their own, so they are compiled directly from Switcher.App's sources instead of via
     ProjectReference, keeping this test assembly WPF-free while still testing the real, unmodified
     integration code (docs/tasks/agent-A2-006-app-integration-v2.md step 8/9: MainWindow/ProjectorWindow/
-    ViewModels/ServiceCollectionExtensions do reference WPF types and are intentionally not covered here).
+    ServiceCollectionExtensions and the view models that use WPF brushes do reference WPF types and are
+    intentionally not covered here).
+
+    OutputTableViewModel/OutputAssignmentRowViewModel are included for the same reason: since the output
+    table became operator-editable its add/remove/ceiling rules carry the edge cases worth testing, and
+    they were written free of WPF types precisely so they can be exercised on any host.
   -->
   <ItemGroup>
     <Compile Include="..\..\src\Switcher.App\Orchestration\AppOrchestrator.cs" Link="AppSources\AppOrchestrator.cs" />
@@ -44,8 +48,14 @@
     <Compile Include="..\..\src\Switcher.App\Configuration\AppConfigLoader.cs" Link="AppSources\AppConfigLoader.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfig.cs" Link="AppSources\RuntimeConfig.cs" />
     <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigStore.cs" Link="AppSources\RuntimeConfigStore.cs" />
+    <Compile Include="..\..\src\Switcher.App\Configuration\RuntimeConfigMigration.cs" Link="AppSources\RuntimeConfigMigration.cs" />
     <Compile Include="..\..\src\Switcher.App\Display\DisplayConflictEvaluator.cs" Link="AppSources\DisplayConflictEvaluator.cs" />
+    <Compile Include="..\..\src\Switcher.App\Display\DisplayOption.cs" Link="AppSources\DisplayOption.cs" />
     <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewRegionModel.cs" Link="AppSources\MultiviewRegionModel.cs" />
+    <Compile Include="..\..\src\Switcher.App\Multiview\CellTally.cs" Link="AppSources\CellTally.cs" />
+    <Compile Include="..\..\src\Switcher.App\Multiview\MultiviewTally.cs" Link="AppSources\MultiviewTally.cs" />
+    <Compile Include="..\..\src\Switcher.App\ViewModels\OutputAssignmentRowViewModel.cs" Link="AppSources\OutputAssignmentRowViewModel.cs" />
+    <Compile Include="..\..\src\Switcher.App\ViewModels\OutputTableViewModel.cs" Link="AppSources\OutputTableViewModel.cs" />
   </ItemGroup>
 
 </Project>

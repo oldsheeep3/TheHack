@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { DEFAULT_PORT, loadHostConfig, saveHostConfig } from '../hostConfig'
+import { DEFAULT_PORT, defaultHostConfig, loadHostConfig, saveHostConfig } from '../hostConfig'
 
 afterEach(() => {
   window.localStorage.clear()
@@ -8,6 +8,16 @@ afterEach(() => {
 describe('hostConfig', () => {
   it('returns null when nothing has been saved', () => {
     expect(loadHostConfig()).toBeNull()
+  })
+
+  it('defaults to the origin this page was served from, since the PC serves the UI itself', () => {
+    // Following the page's own port is what keeps a non-default WebPort working; falling back to
+    // DEFAULT_PORT only covers a URL with no port at all (http://host/).
+    expect(defaultHostConfig()).toEqual({
+      host: window.location.hostname,
+      port: Number(window.location.port) || DEFAULT_PORT,
+    })
+    expect(defaultHostConfig().port).toBe(Number(window.location.port))
   })
 
   it('round-trips a saved host/port through localStorage', () => {

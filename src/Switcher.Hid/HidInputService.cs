@@ -24,6 +24,10 @@ public sealed class HidInputService : IDisposable
     private volatile bool _running;
     private bool _disposed;
 
+    // Read-thread only. -1 (no valid bitmap can be negative) forces the first report to publish, and
+    // resetting it on Stop re-publishes presence after a reconnect.
+    private int _lastModulePresent = -1;
+
     public HidInputService() : this(new HidSharpDevice())
     {
     }
@@ -44,6 +48,12 @@ public sealed class HidInputService : IDisposable
     /// or more dropped frames.</summary>
     public event Action? SequenceGapDetected;
 
+    /// <summary>Raised with the report's <c>module_present</c> bitmap (bit n = module n attached,
+    /// docs/specs/00-system-overview.md §4.1) on the first report after <see cref="Start"/> and then
+    /// only when the bitmap changes. This is the controller telling the App which physical modules
+    /// exist, so the App can add/drop module rows instead of assuming a fixed <c>MAX_MODULES</c>.</summary>
+    public event Action<byte>? ModulePresenceChanged;
+
     /// <summary>Opens the device and starts the background read loop. Safe to call again while
     /// already started (no-op).</summary>
     public void Start()
@@ -58,6 +68,7 @@ public sealed class HidInputService : IDisposable
             }
 
             _device.Open();
+            _lastModulePresent = -1;
             _running = true;
             _readThread = new Thread(ReadLoop) { IsBackground = true, Name = nameof(HidInputService) };
             _readThread.Start();
@@ -111,22 +122,67 @@ public sealed class HidInputService : IDisposable
 
             var report = HidReportParser.ParseInput(body);
 
+            // Presence is republished only on change: the Pico sends module_present in every report
+            // (~1 kHz), and the App's handler persists the reconciled module list to disk.
+            if (_lastModulePresent != report.ModulePresent)
+            {
+                _lastModulePresent = report.ModulePresent;
+                Publish(ModulePresenceChanged, report.ModulePresent);
+            }
+
             if (_seqGapTracker.Update(report.Seq))
             {
-                SequenceGapDetected?.Invoke();
+                Publish(SequenceGapDetected);
             }
 
             foreach (var edge in _edgeDetector.Process(report))
             {
-                SwitchEdge?.Invoke(edge);
+                Publish(SwitchEdge, edge);
             }
 
             foreach (var change in _vrFilter.Process(report))
             {
-                VrChanged?.Invoke(change);
+                Publish(VrChanged, change);
             }
         }
     }
+
+    /// <summary>
+    /// Raises one subscriber event, containing anything it throws.
+    ///
+    /// This loop runs on its own background thread, where an escaping exception ends the whole process —
+    /// and the subscribers are App-side handlers that touch the engine, the disk and the network, any of
+    /// which can fail transiently. A controller event must never be able to take the switcher down
+    /// (docs/specs/00-system-overview.md §5: 1つの障害が全体を止めない). The failure is surfaced through
+    /// <see cref="HandlerFailed"/> so the host can log it.
+    /// </summary>
+    private void Publish<T>(Action<T>? handler, T argument)
+    {
+        try
+        {
+            handler?.Invoke(argument);
+        }
+        catch (Exception ex)
+        {
+            HandlerFailed?.Invoke(ex);
+        }
+    }
+
+    private void Publish(Action? handler)
+    {
+        try
+        {
+            handler?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            HandlerFailed?.Invoke(ex);
+        }
+    }
+
+    /// <summary>Raised when a subscriber of one of the input events threw. Purely diagnostic — the read
+    /// loop carries on regardless.</summary>
+    public event Action<Exception>? HandlerFailed;
 
     public void Dispose()
     {

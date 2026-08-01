@@ -2,45 +2,63 @@ using System.Windows;
 using System.Windows.Interop;
 using Switcher.App.Configuration;
 using Switcher.Contracts;
-using Switcher.VirtualCam;
-using Switcher.VirtualCam.Display;
 
 namespace Switcher.App;
 
 /// <summary>
 /// Sub-operator source projector: a borderless, topmost, full-screen window mirroring whichever PGM
-/// bus the operator assigned to the HDMI output sink (docs/specs/pc-switcher-app.md §2.3/§5). Presents
-/// via <see cref="IHdmiFullscreenOutput"/>, attaching this window's native HWND to it on
-/// <see cref="OnSourceInitialized"/> - <see cref="FramePumpService"/>'s <c>OutputRouter.RouteFrame</c>
-/// call then drives <see cref="IHdmiFullscreenOutput.Present"/> directly, so this window has no frame
-/// handling of its own beyond owning the window/monitor placement and mouse-cursor policy
-/// (docs/tasks/agent-A2-006-app-integration-v2.md step 5).
+/// bus the operator assigned to one HDMI output sink (docs/specs/pc-switcher-app.md §2.3/§5). Since the
+/// libobs migration the native engine renders directly into this window's HWND via
+/// <see cref="IVideoEngine.StartDisplayOutput"/>, so this window only owns the window/monitor placement
+/// and mouse-cursor policy - it does no frame handling of its own.
+/// <para>
+/// The window is per <see cref="OutputSink"/> rather than per app: an operator may configure up to
+/// <see cref="OutputCatalog.MaxSinksPerKind"/> HDMI sinks, each on its own display, and each needs its own
+/// window. That also decides the native target string — <c>HDMI1</c>/<c>HDMI2</c>/<c>HDMI3</c> from
+/// <see cref="OutputCatalog.TokenOf(OutputSink)"/>, not <c>PGM1</c>/<c>PGM2</c>. Two HDMI sinks may carry
+/// the same program bus, and a bus-named target would make both windows the same display inside the
+/// engine, with the second attach replacing the first; the engine resolves the sink token to whichever
+/// bus that sink currently carries.
+/// </para>
 /// </summary>
 public partial class ProjectorWindow : Window
 {
-    private readonly IHdmiFullscreenOutput _hdmiOutput;
-    private readonly OutputRouter _outputRouter;
+    private readonly IVideoEngine _engine;
     private readonly AppConfig _config;
+    private string? _startedTarget;
 
-    public ProjectorWindow(IHdmiFullscreenOutput hdmiOutput, OutputRouter outputRouter, AppConfig config)
+    public ProjectorWindow(OutputSink sink, IVideoEngine engine, AppConfig config)
     {
         InitializeComponent();
-        _hdmiOutput = hdmiOutput;
-        _outputRouter = outputRouter;
+        Sink = sink;
+        _engine = engine;
         _config = config;
 
+        // Several projectors can be open at once, so each says which sink it presents - in the taskbar
+        // preview and in any window-picker the operator is screen-sharing through.
+        Title = $"Source Projector - {OutputCatalog.LabelOf(OutputCatalog.KindOf(sink))} {OutputCatalog.OrdinalOf(sink)}";
+
         SourceInitialized += OnSourceInitialized;
-        Closed += (_, _) => _hdmiOutput.Detach();
+        Closed += (_, _) =>
+        {
+            if (_startedTarget is { } target)
+            {
+                _engine.StopDisplayOutput(target);
+            }
+        };
     }
 
-    /// <summary>Positions this window full-screen on the display currently assigned to the HDMI output
-    /// sink (falling back to <see cref="AppConfig.ProjectorDisplayIndex"/> if none has been configured
-    /// yet) and shows it. The actual DXGI attach happens once the native HWND exists, in
+    /// <summary>Which output sink this window presents; the owning window keys its open projectors on
+    /// it so each HDMI sink can be opened and closed independently.</summary>
+    public OutputSink Sink { get; }
+
+    /// <summary>Positions this window full-screen on the display currently assigned to its sink (falling
+    /// back to <see cref="AppConfig.ProjectorDisplayIndex"/> if none has been configured yet) and shows
+    /// it. The native display attach happens once the HWND exists, in
     /// <see cref="OnSourceInitialized"/>.</summary>
     public void ShowOnConfiguredDisplay()
     {
-        var assignment = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
-        var displayIndex = assignment?.DisplayId ?? _config.ProjectorDisplayIndex;
+        var displayIndex = ConfiguredDisplayIndex();
 
         var screens = System.Windows.Forms.Screen.AllScreens;
         var screen = displayIndex >= 0 && displayIndex < screens.Length ? screens[displayIndex] : screens[0];
@@ -55,14 +73,14 @@ public partial class ProjectorWindow : Window
         WindowState = WindowState.Maximized;
     }
 
+    private int ConfiguredDisplayIndex() =>
+        _engine.CurrentAssignments.FirstOrDefault(a => a.Sink == Sink)?.DisplayId ?? _config.ProjectorDisplayIndex;
+
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        var assignment = _outputRouter.CurrentAssignments.FirstOrDefault(a => a.Sink == OutputSink.Hdmi);
-        var displayIndex = assignment?.DisplayId ?? _config.ProjectorDisplayIndex;
-        var hideCursor = assignment?.HideCursor ?? true;
-        var fullscreen = assignment?.Fullscreen ?? true;
-
+        var target = OutputCatalog.TokenOf(Sink);
         var hwnd = new WindowInteropHelper(this).Handle;
-        _hdmiOutput.Attach(displayIndex, hwnd, hideCursor, fullscreen);
+        _engine.StartDisplayOutput(target, hwnd, ConfiguredDisplayIndex());
+        _startedTarget = target;
     }
 }

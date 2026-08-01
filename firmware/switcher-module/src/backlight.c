@@ -4,13 +4,18 @@
 //
 // タイミングはNOPループでの概算(48MHz動作, 1サイクル≈20.8ns)。目標値(datasheet基準:
 // T0H=300ns/T0L=900ns, T1H=600ns/T1L=600ns)に対するベストエフォートであり、
-// module_config.hの暫定ピン値と同様にPCB確定後・実機オシロでの再調整を要する。
+// 実機オシロでの再調整を要する。
 
 #include "backlight.h"
 
 #include "ch32fun.h"
 
+#include "module_config.h"
 #include "sk6812_frame.h"
+
+// LED_DATA は基板上 14pin(PC4)。module_config.h のピンエンコードとch32fun定数の一致を
+// ビルド時に検証する。
+_Static_assert(MODULE_PIN(MODULE_PORT_C, 4) == PC4, "MODULE_PIN encoding must match ch32fun PC4");
 
 #define SK6812_NOP_T0H 6
 #define SK6812_NOP_T0L 34

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>機能 — Switcher</title>
+<meta name="description" content="Switcher の機能一覧。入力の種類、2系統 M/E、MIX ソース、マルチビュー、出力、操作方法。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark"></span> Switcher</a>
+    <nav class="site-nav" aria-label="サイト">
+      <a href="index.html">ホーム</a>
+      <a href="features.html">機能</a>
+      <a href="guide.html">使い方</a>
+      <a href="hardware.html" data-soon>ハードウェア</a>
+      <a href="atem.html" data-soon>ATEM 連携</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Features</p>
+      <h1>機能</h1>
+      <p class="lede">実装済みの機能のみを掲載しています。予定のものは「今後」として明記します。</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Inputs</p>
+        <h2>入力</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">種類</th><th scope="col">内容</th><th scope="col">備考</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Webcam</th><td>USB カメラ・キャプチャカード（UVC / DirectShow）</td>
+                <td>解像度と FPS を選択可能。未指定だとデバイス既定のモードで開くため、低フレームレートになることがあります</td></tr>
+            <tr><th scope="row">NDI</th><td>ネットワーク経由の映像</td>
+                <td>NDI SDK を直接利用。OBS 用 NDI プラグインは不要</td></tr>
+            <tr><th scope="row">SRT</th><td><code>srt://</code> ストリーム</td><td>受信設定の案内画面あり</td></tr>
+            <tr><th scope="row">画像</th><td>PNG / JPEG / GIF / WebP / BMP</td><td>ロゴ・背景・スチル</td></tr>
+            <tr><th scope="row">HTML</th><td>Web ページ・ローカル <code>.html</code></td>
+                <td>スコア表示・テロップなど。ページの描画解像度と FPS を指定できます</td></tr>
+            <tr><th scope="row">MIX</th><td>複数ソースの合成</td><td>下記参照</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">MIX source</p>
+        <h2>合成ソース</h2>
+        <p class="lede">
+          複数のソースを 1 枚のキャンバスに自由配置し、<strong>1 つのソースとして扱えます</strong>。
+        </p>
+      </div>
+      <div class="grid grid-2">
+        <article class="card">
+          <h3>どこにでも置ける</h3>
+          <p>MIX はカメラと同じ扱いです。バスに載せる／マルチビューのセルに置く／物理モジュールの
+          スイッチに割り当てる、すべてそのまま動きます。</p>
+        </article>
+        <article class="card">
+          <h3>メンバーは共有</h3>
+          <p>MIX に入れたカメラは、同時に単体でバスに載せられます。デバイスは 1 回しか開かれません。</p>
+        </article>
+        <article class="card">
+          <h3>編集</h3>
+          <p>実寸のキャンバス上でドラッグ移動、右下の角でリサイズ。各レイヤーはライブのサムネイルで
+          表示されるので、実際の絵を見ながら composition を組めます。</p>
+        </article>
+        <article class="card">
+          <h3>プリセット</h3>
+          <p>全画面 / 左半分 / 右半分 / 隅にワイプ。座標とサイズの数値入力、重ね順の前後移動も可能です。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Mix / Effect</p>
+        <h2>2系統 M/E</h2>
+      </div>
+      <div class="grid grid-3">
+        <article class="card">
+          <h3>独立した 2 バス</h3>
+          <p>PGM1/PVW1 と PGM2/PVW2 は互いに影響しません。配信用と会場用で別の絵を同時に作れます。</p>
+        </article>
+        <article class="card">
+          <h3>CUT / AUTO</h3>
+          <p>CUT は即時、AUTO はフェード（250 / 500 / 1000 / 2000 ms）。操作したバスにだけ作用します。</p>
+        </article>
+        <article class="card">
+          <h3>複数レイヤー</h3>
+          <p>1 つのバスに複数のソースを重ねられます。並び順がそのまま重ね順になります。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Multiview</p>
+        <h2>マルチビュー</h2>
+      </div>
+      <div class="grid grid-3">
+        <article class="card">
+          <h3>4×4 〜 6×6</h3>
+          <p>行と列を独立に選べます（正方形でなくても構いません）。セルはドラッグで矩形選択して結合、
+          分割で元に戻せます。</p>
+        </article>
+        <article class="card">
+          <h3>タリー枠</h3>
+          <p>セルの内容がオンエアなら赤枠、プレビューにステージ中なら緑枠。<strong>カメラのセルも
+          同じルール</strong>なので、どの入力が本線かがひと目で分かります。</p>
+        </article>
+        <article class="card">
+          <h3>全画面表示</h3>
+          <p>別のディスプレイに全画面で出せます。オペレーター画面と同じディスプレイを選ぶと警告します。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Outputs &amp; control</p>
+        <h2>出力と操作</h2>
+      </div>
+      <div class="grid grid-2">
+        <article class="card">
+          <span class="tag">Outputs</span>
+          <h3>出力</h3>
+          <p>仮想カメラ（Zoom / Teams などへ）、HDMI 全画面、NDI 送出。初期状態は<strong>ウェブカメラ 1 つ＋
+          HDMI 1 つ</strong>で、そこから HDMI と NDI を足せます（<strong>ウェブカメラ 1 つ、
+          HDMI・NDI はそれぞれ最大 3 つ、合計最大 6 つ</strong>）。それぞれ PGM1 / PGM2 のどちらを出すか選べます。
+          <strong>PGM1・PGM2 はそれぞれ最低 1 つの出力が必要</strong>です ──
+          どこにも出ていない本線を作らないための決まりです。</p>
+          <p><strong>ウェブカメラ出力は 1 つだけ</strong>です。OBS が用意できる仮想カメラは 1 本しかないので、
+          2 つ目は中身が NDI 送出になり「ウェブカメラ」という名前が実際の出口を偽ってしまいます。
+          それを避けるために 2 つ目は追加できません ── もう 1 系統いるときは NDI 出力を足してください。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Audio</span>
+          <h3>音声</h3>
+          <p>映像ソースを追加すると音声も一緒に入ります。ソースごとに <strong>AFV</strong>（オンエア中
+          だけ鳴る）・<strong>ON</strong>（常に鳴る）・<strong>OFF</strong> を選択。合成ソースが
+          オンエアなら、その中のソースの音も鳴ります。</p>
+          <p>出力は PGM1 / PGM2 が独立していて、それぞれ別の音声デバイスへ送れます。1 つのバスを
+          複数のデバイスへ同時に出すこともできます（会場 PA と収録機、など）。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Keyboard</span>
+          <h3>キーボード</h3>
+          <p><code>1</code>–<code>9</code> でステージ、<code>Space</code> で CUT、<code>A</code> で
+          AUTO、<code>Esc</code> でプレビュークリア、<code>Tab</code> で M/E 切替。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Controller</span>
+          <h3>物理コントローラー</h3>
+          <p>Pico 2W ベースのモジュール式スイッチ。<strong>接続されているモジュールだけ</strong>が
+          自動で画面に現れます。バックライトがタリーに追随します。</p>
+        </article>
+        <article class="card">
+          <span class="tag">Web API</span>
+          <h3>Web / API</h3>
+          <p>同一ネットワークのスマホなどから操作するための REST API と WebSocket を内蔵しています
+          （既定ポート 8080）。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Roadmap</p>
+        <h2>今後</h2>
+      </div>
+      <div class="grid grid-3">
+        <article class="card"><span class="pill is-soon">予定</span><h3>音声ミキサー</h3><p>現在はモードとデバイス割当のみ。レベル調整とメーターは今後。</p></article>
+        <article class="card"><span class="pill is-soon">予定</span><h3>録画・配信</h3><p>録画と RTMP 配信。</p></article>
+        <article class="card"><span class="pill is-soon">予定</span><h3>ATEM 連携の拡充</h3><p><a href="atem.html">ATEM 連携</a>を参照。</p></article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Switcher — 2026-Team-38</span>
+    <span class="spacer"></span>
+    <a href="index.html">ホーム</a>
+    <a href="guide.html">使い方</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
