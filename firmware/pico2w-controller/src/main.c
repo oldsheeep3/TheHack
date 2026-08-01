@@ -13,7 +13,6 @@
 int main(void) {
     stdio_init_all();
 
-    i2c_modules_init();
     backlight_init();
 
     // 設定(controller_id/モジュール割付ヒント/ネットワーク資格情報)はUSB列挙より前にロードし、
@@ -22,6 +21,11 @@ int main(void) {
     settings_load(&settings);
     usb_hid_set_controller_id(settings_resolve_controller_id(&settings));
     usb_hid_init();
+
+    // I2C初期化はUSB列挙の準備より後に行う。モジュール側の異常(バスがLowに張り付く等)で
+    // I2C初期化が手間取っても、PCから見て「デバイスが応答しない」状態にならないようにする
+    // (USB-HIDが主経路。親仕様書 §4非機能要件)。
+    i2c_modules_init();
 
 #ifdef ENABLE_WIRELESS
     // 無線チャネル(§2.5, 任意)はUSB-HIDの代替経路であり、USB直結が主経路(§4非機能要件)。

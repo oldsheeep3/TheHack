@@ -33,3 +33,10 @@ uint8_t module_bus_i2c_index(uint8_t bus_index) {
     }
     return module_bus_i2c_index_for_pin(MODULE_BUSES[bus_index].sda_pin);
 }
+
+uint8_t module_bus_next(uint8_t bus_index) {
+    if (bus_index + 1u >= MODULE_BUS_COUNT) {
+        return 0;
+    }
+    return (uint8_t)(bus_index + 1u);
+}

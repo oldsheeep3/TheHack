@@ -31,6 +31,7 @@ firmware/switcher-module/*.elf
 firmware/switcher-module/*.bin
 firmware/switcher-module/*.hex
 firmware/switcher-module/*.lst
+firmware/switcher-module/*.map
 firmware/switcher-module/*.o
 firmware/switcher-module/test/test_module_config
 firmware/switcher-module/test/test_module_index

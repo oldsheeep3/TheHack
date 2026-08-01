@@ -28,4 +28,8 @@ bool module_bus_pins_are_valid(uint8_t sda_pin, uint8_t scl_pin);
 // バス番号(0基点)のコントローラ番号。範囲外は0を返す。
 uint8_t module_bus_i2c_index(uint8_t bus_index);
 
+// ラウンドロビンで次に見るバス番号。1回のメインループで1バスずつしか進めないため
+// (i2c_modules_poll)、この順番でスロットを一巡する。範囲外の入力は先頭へ戻す。
+uint8_t module_bus_next(uint8_t bus_index);
+
 #endif // PICO2W_CONTROLLER_MODULE_BUS_H

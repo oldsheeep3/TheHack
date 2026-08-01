@@ -3,6 +3,7 @@
 // 配線とファームのバス定義がずれた場合に必ず失敗するようにする。
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "config.h"
@@ -82,12 +83,43 @@ static void test_i2c_index_mapping(void) {
     assert(module_bus_i2c_index(255) == 0);
 }
 
+// ラウンドロビン: 1回の呼び出しで1バスずつ進み、最後のバスの次は先頭へ戻る
+// (i2c_modules_poll が1呼び出し1バスで全スロットを一巡するための順序)。
+static void test_round_robin(void) {
+    uint8_t bus = 0;
+    for (int i = 0; i < MODULE_BUS_COUNT - 1; i++) {
+        uint8_t next = module_bus_next(bus);
+        assert(next == bus + 1);
+        bus = next;
+    }
+    assert(bus == MODULE_BUS_COUNT - 1);
+    assert(module_bus_next(bus) == 0); // 一巡して先頭へ
+
+    // 全バスをちょうど1回ずつ通る。
+    bool seen[MODULE_BUS_COUNT] = {false};
+    uint8_t cur = 0;
+    for (int i = 0; i < MODULE_BUS_COUNT; i++) {
+        assert(!seen[cur]);
+        seen[cur] = true;
+        cur = module_bus_next(cur);
+    }
+    assert(cur == 0);
+    for (int i = 0; i < MODULE_BUS_COUNT; i++) {
+        assert(seen[i]);
+    }
+
+    // 範囲外の入力でも先頭へ戻るだけで、配列外を指さない。
+    assert(module_bus_next(MODULE_BUS_COUNT) == 0);
+    assert(module_bus_next(255) == 0);
+}
+
 int main(void) {
     test_bus_count();
     test_pin_assignment();
     test_no_duplicate_pins();
     test_pins_are_valid_for_rp2xxx();
     test_i2c_index_mapping();
+    test_round_robin();
 
     printf("test_module_bus: OK\n");
     return 0;
