@@ -14,6 +14,21 @@ export interface HostConfig {
   port: number
 }
 
+/**
+ * Where to reach the PC when the operator has not overridden it: wherever this page came from.
+ * The PC serves this UI from the same Kestrel host as `/api/v1/*`, so the page's own origin is the
+ * right answer — and using it keeps every request same-origin, which is what lets the API get away
+ * with sending no CORS headers. A page opened from somewhere else (a Vite dev server) falls back to
+ * the protocol's port and needs the field filled in by hand.
+ */
+export function defaultHostConfig(): HostConfig {
+  const port = Number(window.location.port)
+  return {
+    host: window.location.hostname,
+    port: Number.isInteger(port) && port > 0 ? port : DEFAULT_PORT,
+  }
+}
+
 export function loadHostConfig(): HostConfig | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)

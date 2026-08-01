@@ -78,27 +78,13 @@ export function ProgramPanel({ apiClient, sources, programs, onLayersChange, onE
     commitLayers(updateLayerPip(activeLayers, selectedLayerIndex, pip))
   }
 
-  const handleTake = (): void => {
-    apiClient
-      .applyProgram(buildProgramRequest(activeBus, activeLayers, true))
-      .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
-  }
-
   const sourceName = (id: string): string => sources.find((source) => source.id === id)?.name ?? id
   const selectedLayer = selectedLayerIndex !== null ? activeLayers[selectedLayerIndex] : null
 
   return (
     <Section
-      title="2系統ME プログラム＋PiP編集"
-      actions={
-        <button
-          type="button"
-          onClick={handleTake}
-          className="rounded-md bg-danger px-4 py-2 text-sm font-semibold text-white"
-        >
-          TAKE ({activeBus})
-        </button>
-      }
+      title="2系統ME プログラム構成＋PiP編集"
+      hint="レイヤー構成とPiPレイアウトの設定です。TAKE（本番切替）はPC/コントローラー側で行います。"
     >
       <div className="mb-3 flex gap-2" role="tablist" aria-label="プログラムバス切替">
         {PGM_BUSES.map((bus) => (

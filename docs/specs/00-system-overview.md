@@ -112,7 +112,10 @@ Pico 2W はベンダー定義の HID デバイスとして列挙され、集約�
 OBS的にソースを自由追加し、2系統ME・マルチビュー・出力割当・モジュール割付・Pico設定を操作する。JSONフィールドはスネークケース。
 
 - **ソース管理**
-  - `GET /api/v1/sources` … 定義済みソース一覧（`SourceInfo[]`）。
+  - `GET /api/v1/sources` … エンジンが実行中のソース一覧（`SourceInfo[]`: チャンネル/名前/プロトコル/状態）。
+  - `GET /api/v1/sources/definitions` … 各ソースの設定内容（`SourceDefinition[]`）。`SourceInfo` は種別ごとの
+    設定を持たないため、設定UIの編集フォームはこちらから復元する（`PUT` は定義全体を置換するので、
+    読み出せないと未取得のフィールドを潰してしまう）。
   - `POST /api/v1/sources` … ソース追加（`SourceDefinition`）。
   - `PUT /api/v1/sources/{id}` / `DELETE /api/v1/sources/{id}` … 更新/削除。
 
@@ -121,12 +124,23 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 {
   "id": "src-ndi-cam1",
   "name": "Cam 1 (NDI)",
-  "type": "NDI",                       // "NDI" | "WEBCAM" | "SRT"
+  "type": "NDI",                       // "NDI" | "WEBCAM" | "SRT" | "IMAGE" | "HTML" | "MIX"
   "ndi": { "source_name": "STUDIO (Cam1)" },
   "webcam": null,                       // { "device_id": "...", "format": "1920x1080@30" }
-  "srt": null                           // { "url": "srt://192.168.1.100:9000?mode=caller", "latency_ms": 40 }
+  "srt": null,                          // { "url": "srt://192.168.1.100:9000?mode=caller", "latency_ms": 40 }
+  "image": null,                        // { "file_path": "C:\\media\\logo.png" }
+  "html": null,                         // { "url": "https://...", "width": 1920, "height": 1080,
+                                        //   "is_local_file": false, "fps": 30, "css": null }
+  "mix": null,                          // { "layers": [ { "source_id": "...", "x_position": 0, "y_position": 0,
+                                        //   "width": 960, "height": 1080, "z_order": 0, "crop": null } ],
+                                        //   "canvas_width": 1920, "canvas_height": 1080 }
+  "audio_mode": "AFV"                   // "OFF" | "ON" | "AFV"（既定 AFV: 映像が本番のときだけ聞こえる）
 }
 ```
+
+- **入力デバイス列挙**
+  - `GET /api/v1/devices/{webcam|ndi}` … 選択可能な入力デバイス（`DeviceInfo[]`）。SRTはプッシュ型のため列挙不可。
+  - `GET /api/v1/srt/setup` … SRT受信の待受ポート・このPCのLANアドレス・送信側に渡すURL（`SrtSetupInfo`）。
 
 - **プログラム/合成（2系統ME）**
   - `POST /api/v1/program` … PGM1/PGM2 の合成メンバー・PiPレイアウトの適用、および PVW→PGM の TAKE。
@@ -143,17 +157,32 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 }
 ```
 
-- **マルチビュー（4x4 コンフィギュラブル）**
-  - `PUT /api/v1/multiview` … 16セルの割当（`PGM1`/`PGM2`/`PVW1`/`PVW2`/`SRC:<id>`/`EMPTY`）。
+- **マルチビュー（コンフィギュラブル）**
+  - `GET /api/v1/multiview` … 現在のレイアウト。
+  - `PUT /api/v1/multiview` … レイアウト置換。割当トークンは `PGM1`/`PGM2`/`PVW1`/`PVW2`/`SRC:<id>`/`EMPTY`。
+  - 2形式あり、**どちらか一方だけ**を送る（両方／どちらも無しは 400）:
+    - 旧: `cells`（4x4固定の16セル）。旧ビルドが書いた設定を読むために維持。
+    - 新: `grid`（4〜6行×4〜6列）＋ `regions`（セル結合可。グリッドを過不足なく覆うこと）。
 
 ```json
+// 旧形式
 { "cells": [ "PGM1","PGM2","PVW1","PVW2",
              "SRC:src-ndi-cam1","SRC:src-webcam-1","EMPTY","EMPTY",
              "EMPTY","EMPTY","EMPTY","EMPTY",
              "EMPTY","EMPTY","EMPTY","EMPTY" ] }
+
+// 新形式（左上2x2をPGM1に結合した例）
+{
+  "grid": { "rows": 4, "cols": 4 },
+  "regions": [
+    { "row": 0, "col": 0, "row_span": 2, "col_span": 2, "content": "PGM1" }
+    // ... 残りのセルを1x1で埋める
+  ]
+}
 ```
 
 - **出力割当**
+  - `GET /api/v1/outputs` … 現在の出力テーブル。
   - `PUT /api/v1/outputs` … 出力テーブル全体を置換し、各 sink へ PGM を割当。
   - sink は固定5系統ではなく、**種別（`WEBCAM`/`HDMI`/`NDI`）＋序数**で表す:
     `VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`。
@@ -175,7 +204,19 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 }
 ```
 
+- **音声出力**
+  - `GET /api/v1/audio/devices` … このPCの再生デバイス一覧（`AudioDeviceInfo[]`）。
+  - `GET /api/v1/audio/outputs` … 現在のバス→デバイス割当。
+  - `PUT /api/v1/audio/outputs` … 割当テーブル全体を置換。1つのバスを複数デバイスへ同時に出せる
+    （空の `device_id` はシステム既定デバイス。空配列は「音声を出さない」の意）。
+
+```json
+{ "outputs": [ { "bus": "PGM1", "device_id": "", "device_name": null },
+               { "bus": "PGM2", "device_id": "{0.0.0.1}", "device_name": "Speakers" } ] }
+```
+
 - **モジュール割付・ボリューム割当**
+  - `GET /api/v1/modules` … 現在のモジュール割付。
   - `PUT /api/v1/modules` … 物理モジュールの `src1/src2` を論理ソースへ紐付け、VRの割当先（トランジション/汎用パラメータ）を指定、バックライトポリシーを設定。
 
 ```json
@@ -189,7 +230,11 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 ```
 
 - **ATEM 遠隔制御**
+  - `GET /api/v1/atem` … 現在の接続設定と割付。
   - `PUT /api/v1/atem` … 制御対象 ATEM の接続設定（IP）とボタン→ATEMコマンド割付を保存。
+  - `GET /api/v1/atem/discover` … LANを走査して見つかったATEM一覧（`AtemDeviceInfo[]`）。
+  - `POST /api/v1/atem/streaming` … 接続中ATEMのストリーミング出力先URL（`srt://` でPCへ送り込む用途）を設定。
+    ATEM未接続時は 409（リクエストの誤りではないため4xxで送信者を責めない）。
   - `POST /api/v1/atem/command` … 単発のATEMコマンド送出（Program/Preview入力切替・Cut/Auto）。
 
 ```json
@@ -231,7 +276,7 @@ OBS的にソースを自由追加し、2系統ME・マルチビュー・出力�
 
 | ポート | プロトコル | 用途 |
 | --- | --- | --- |
-| 8080 | HTTP/WebSocket | 設定WebAPI・WebUI・（スマホ）リモート接続 |
+| 8080 | HTTP/WebSocket | 設定WebAPI・設定WebUI（`/` から静的配信）・（スマホ）リモート接続 |
 | 9000 | SRT (Listener) | 映像入力（ATEM PGM/SRTソース等） |
 | 9999 | UDP broadcast | タリー配信（外部タリーデバイス向け） |
 | 9910 | UDP | ATEM遠隔制御（ATEM純正プロトコル） |
