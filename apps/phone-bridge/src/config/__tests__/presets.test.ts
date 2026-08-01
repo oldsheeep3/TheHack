@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PipSettings } from '../../protocol/types'
-import { createEmptyMultiviewCells } from '../multiview'
+import { DEFAULT_GRID, createGridRegions } from '../multiview'
 import { LocalStoragePresetStore, emptyScenePreset, type ScenePreset } from '../presets'
 
 const pip: PipSettings = {
@@ -25,11 +25,11 @@ beforeEach(() => {
 })
 
 describe('emptyScenePreset', () => {
-  it('starts with empty layer stacks and a fully-empty 16-cell multiview', () => {
+  it('starts with empty layer stacks and a fully-empty 4x4 multiview', () => {
     const preset = emptyScenePreset('blank')
     expect(preset.programs).toEqual({ PGM1: [], PGM2: [] })
-    expect(preset.multiview).toEqual(createEmptyMultiviewCells())
-    expect(preset.multiview).toHaveLength(16)
+    expect(preset.multiviewGrid).toEqual(DEFAULT_GRID)
+    expect(preset.multiviewRegions).toEqual(createGridRegions(DEFAULT_GRID))
   })
 })
 
@@ -67,7 +67,7 @@ describe('LocalStoragePresetStore', () => {
   })
 
   it('recovers gracefully from corrupted storage contents', () => {
-    window.localStorage.setItem('phone-bridge:scene-presets-v2', 'not json')
+    window.localStorage.setItem('phone-bridge:scene-presets-v3', 'not json')
     const store = new LocalStoragePresetStore()
 
     expect(store.list()).toEqual([])

@@ -149,7 +149,7 @@ public sealed class AppOrchestratorTests
         await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm2, null, null, null),
-            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm1, null, null, null),
         ]));
 
         var assignment = Assert.Single(harness.Engine.CurrentAssignments, a => a.Sink == OutputSink.Vcam1);
@@ -170,14 +170,45 @@ public sealed class AppOrchestratorTests
     }
 
     [Fact]
+    public async Task ApplyOutputsAsync_RejectsATableOverTheOutputCeilings()
+    {
+        using var harness = new OrchestratorTestHarness();
+        var before = harness.Engine.CurrentAssignments;
+
+        // Every sink there is - nine, three past the total ceiling. The operator window's + button
+        // cannot build this, but the Web API and a hand-edited config can, so the orchestrator checks too.
+        var outputs = new List<OutputAssignment>();
+        foreach (var kind in Enum.GetValues<OutputKind>())
+        {
+            foreach (var sink in OutputCatalog.Sinks(kind))
+            {
+                outputs.Add(new OutputAssignment(
+                    sink, outputs.Count % 2 == 0 ? OutputSource.Pgm1 : OutputSource.Pgm2, null, null, null));
+            }
+        }
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(outputs)));
+
+        Assert.Contains($"at most {OutputCatalog.MaxTotal}", error.Message, StringComparison.Ordinal);
+        Assert.Equal(before, harness.Engine.CurrentAssignments);
+    }
+
+    [Fact]
     public async Task BusesWithoutRunningOutput_ReportsABusWhoseOnlySinkNeverStarted()
     {
         using var harness = new OrchestratorTestHarness();
 
-        // The default routing sends PGM2 to VCAM2, which is an NDI sender — on a machine with no NDI
-        // runtime it is accepted and then never starts, leaving PGM2 with nowhere to go.
-        harness.Engine.FailingSinks.Add(OutputSink.Vcam2);
-        await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(OutputDefaults.Default));
+        // PGM2's only sink here is an NDI sender, and one that finds no NDI runtime is accepted and then
+        // never starts, leaving PGM2 with nowhere to go. Spelled out rather than taken from
+        // OutputDefaults.Default: the default table sends PGM2 to an HDMI sink, whose "running" is
+        // decided by whether a projector window is open rather than by the sink itself.
+        harness.Engine.FailingSinks.Add(OutputSink.Ndi1);
+        await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(
+        [
+            new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm2, null, null, null),
+        ]));
 
         Assert.Equal([OutputSource.Pgm2], harness.Orchestrator.BusesWithoutRunningOutput());
     }
@@ -191,7 +222,7 @@ public sealed class AppOrchestratorTests
         await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm2, null, null, null),
             new OutputAssignment(OutputSink.Ndi2, OutputSource.Pgm2, null, null, null),
         ]));
 
@@ -218,6 +249,43 @@ public sealed class AppOrchestratorTests
             harness.Orchestrator.RestorePersistedOutputs();
 
             Assert.Equal(OutputDefaults.Default, harness.Engine.CurrentAssignments);
+            Assert.Equal(OutputDefaults.Default, harness.RuntimeConfigStore.Current.OutputAssignments);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RestorePersistedOutputs_FallsBackToDefaultsForTheOldTwoVirtualCameraTable()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"switcher-outputs-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+
+        try
+        {
+            // The default a build predating the one-virtual-camera ceiling wrote: PGM1→VCAM1,
+            // PGM2→VCAM2. It still deserializes, so the upgrade lands here rather than at the parser,
+            // and starting on the current defaults beats starting with a table the engine would have to
+            // honour by sending a "webcam" somewhere that is not a camera.
+            var store = new Switcher.App.Configuration.RuntimeConfigStore(
+                dir, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+            store.Save(store.Current with
+            {
+                OutputAssignments =
+                [
+                    new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
+                    new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+                ],
+            });
+
+            using var harness = new OrchestratorTestHarnessAtPath(dir);
+            harness.Orchestrator.RestorePersistedOutputs();
+
+            Assert.Equal(OutputDefaults.Default, harness.Engine.CurrentAssignments);
+
+            // Rewritten too, so the next start does not repeat the fallback.
             Assert.Equal(OutputDefaults.Default, harness.RuntimeConfigStore.Current.OutputAssignments);
         }
         finally

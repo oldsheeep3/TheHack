@@ -58,4 +58,33 @@
              Text="switcher-engine.dll not found under $(_NativeEngineBuild); build it via native\switcher-engine\build.bat (Windows + OBS). The app will fail at engine start (0x8007007E) without it." />
   </Target>
 
+  <!--
+    Deploy the built settings web UI (apps\phone-bridge\dist) as wwwroot beside the app, which is where
+    WebHost looks for it. Serving the page from the API's own port is what keeps it same-origin with the
+    /api/v1/* calls it makes - a page served from anywhere else is blocked by the browser unless the host
+    (which binds 0.0.0.0) hands out CORS headers to the whole LAN.
+
+    Copy-if-present, like the native engine above: the front end is an npm build, so requiring node on
+    every managed build would break CI and any dev who only touches C#. Without it the API still starts,
+    it just serves no pages - hence the message pointing at the one command that fixes that.
+  -->
+  <Target Name="CopyPhoneBridgeUi" AfterTargets="Build">
+    <PropertyGroup>
+      <_PhoneBridgeDist>$(MSBuildThisFileDirectory)..\..\apps\phone-bridge\dist</_PhoneBridgeDist>
+    </PropertyGroup>
+    <ItemGroup>
+      <_PhoneBridgeUiFiles Include="$(_PhoneBridgeDist)\**\*" />
+    </ItemGroup>
+    <!-- Cleared first: Vite names assets by content hash, so copying over the top would leave every
+         previous build's index-<hash>.js behind for as long as the output directory lives. -->
+    <RemoveDir Condition="'@(_PhoneBridgeUiFiles)' != ''" Directories="$(OutDir)wwwroot" />
+    <Copy Condition="'@(_PhoneBridgeUiFiles)' != ''"
+          SourceFiles="@(_PhoneBridgeUiFiles)"
+          DestinationFiles="@(_PhoneBridgeUiFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Message Condition="'@(_PhoneBridgeUiFiles)' != ''" Importance="high"
+             Text="Copied settings web UI: $(_PhoneBridgeDist) -> $(OutDir)wwwroot" />
+    <Message Condition="'@(_PhoneBridgeUiFiles)' == ''" Importance="high"
+             Text="No settings web UI at $(_PhoneBridgeDist); build it with 'npm ci &amp;&amp; npm run build' in apps\phone-bridge. The API still runs; http://&lt;pc&gt;:8080/ will just serve nothing." />
+  </Target>
+
 </Project>

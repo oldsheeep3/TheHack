@@ -72,6 +72,31 @@ public sealed class RuntimeConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_ReadsTheLegacyOrdinalLessHdmiTokenAsTheFirstDisplaySink()
+    {
+        // Exactly what a build predating multiple sinks per kind wrote: one display sink, token "HDMI".
+        // An operator upgrading must keep their routing rather than come up on the defaults.
+        var legacyJson = JsonSerializer
+            .Serialize(RuntimeConfig.CreateDefault(), ProtocolJsonOptions.Default)
+            .Replace("\"HDMI1\"", "\"HDMI\"", StringComparison.Ordinal);
+        Assert.Contains("\"HDMI\"", legacyJson, StringComparison.Ordinal);
+        File.WriteAllText(Path.Combine(_dir, RuntimeConfigStore.FileName), legacyJson);
+
+        var store = NewStore();
+
+        var hdmi = Assert.Single(store.Current.OutputAssignments, o => OutputCatalog.KindOf(o.Sink) == OutputKind.Hdmi);
+        Assert.Equal(OutputSink.Hdmi1, hdmi.Sink);
+        Assert.Equal(OutputSource.Pgm2, hdmi.Source);
+
+        // Saving again rewrites it in the canonical ordinal form, so the legacy token disappears.
+        store.Save(store.Current);
+        Assert.Contains(
+            "\"HDMI1\"",
+            File.ReadAllText(Path.Combine(_dir, RuntimeConfigStore.FileName)),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Save_DoesNotThrowWhenTheDirectoryCannotBeWritten()
     {
         var store = NewStore();

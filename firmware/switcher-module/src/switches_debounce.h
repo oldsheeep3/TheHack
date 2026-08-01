@@ -5,11 +5,11 @@
 
 #include "module_config.h"
 
-// GPIO非依存のSWマトリクス・デバウンス状態機械。Pico SDK/ch32v003funに依存しないため
+// GPIO非依存のSWデバウンス状態機械。Pico SDK/ch32v003funに依存しないため
 // ホストのgccでそのままビルド・テストできる (test/test_switches.c 参照)。
 //
-// 4SW (b0=PGM1×SRC1, b1=PGM1×SRC2, b2=PGM2×SRC1, b3=PGM2×SRC2, module_config.h の
-// SW_BIT_INDEX() 準拠) をそれぞれ独立にデバウンスし、確定した安定状態(レベル)を4bitで
+// 4SW (b0=SW_1(PGM1×SRC1), b1=SW_2(PGM1×SRC2), b2=SW_3(PGM2×SRC1), b3=SW_4(PGM2×SRC2),
+// module_config.h の SW_BIT_SW1..SW_BIT_SW4 準拠) をそれぞれ独立にデバウンスし、確定した安定状態(レベル)を4bitで
 // 保持する。イベントではなくレベルを保持するため、押しっぱなし中に同じ生値が来ても
 // 確定状態は変化せず(非連打)、走査のたびに冪等に同じ値を返す。
 
@@ -25,7 +25,7 @@ typedef struct {
 
 void switches_debouncer_init(switches_debouncer_t *db);
 
-// 4bit生サンプル (b0..b3, module_config.h の SW_BIT_INDEX() 準拠) を1回投入する。
+// 4bit生サンプル (b0..b3, module_config.h の SW_BIT_SW1..SW_BIT_SW4 準拠) を1回投入する。
 // 各SWビットごとに独立して SWITCHES_DEBOUNCE_STABLE_SAMPLES 回連続で同じ生値が
 // 観測された時点でそのビットの安定状態を更新する。更新後の確定4bit状態を返す。
 uint8_t switches_debouncer_sample(switches_debouncer_t *db, uint8_t raw_state);

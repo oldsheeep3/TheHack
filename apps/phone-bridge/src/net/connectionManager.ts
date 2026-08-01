@@ -1,6 +1,6 @@
 import { ApiClient } from '../protocol/apiClient'
 import { WsClient, type WsConnectionState } from '../protocol/wsClient'
-import { DEFAULT_PORT, loadHostConfig, saveHostConfig } from './hostConfig'
+import { defaultHostConfig, loadHostConfig, saveHostConfig } from './hostConfig'
 
 export type NetworkReachability = 'unknown' | 'checking' | 'reachable' | 'unreachable'
 
@@ -35,9 +35,9 @@ export class ConnectionManager {
   private readonly reachabilityPollMs: number
 
   constructor(options: ConnectionManagerOptions = {}) {
-    const stored = loadHostConfig()
-    this.host = stored?.host ?? window.location.hostname
-    this.port = stored?.port ?? DEFAULT_PORT
+    const target = loadHostConfig() ?? defaultHostConfig()
+    this.host = target.host
+    this.port = target.port
     this.reachabilityPollMs = options.reachabilityPollMs ?? DEFAULT_REACHABILITY_POLL_MS
     this.apiClient = new ApiClient({ host: this.host, port: this.port })
     this.wsClient = new WsClient({ host: this.host, port: this.port })

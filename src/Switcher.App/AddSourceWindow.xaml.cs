@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
+using Switcher.App.Orchestration;
 using Switcher.Contracts;
 
 namespace Switcher.App;
@@ -34,26 +35,37 @@ public partial class AddSourceWindow : Window
 
     private const int DeviceQueryDefaultLatencyMs = 40;
 
+    /// <summary>Name pre-filled when the operator picks an ATEM as the SRT sender.</summary>
+    private const string AtemProgramSourceName = "ATEM ON AIR";
+
     private readonly IDeviceQueryService _deviceQueryService;
-    private readonly AppConfig _config;
+    private readonly AppOrchestrator _orchestrator;
     private readonly ILogger _logger;
     private readonly ObservableCollection<DeviceInfo> _devices = [];
+    private readonly ObservableCollection<SrtSenderOption> _srtSenders = [];
+    private readonly ObservableCollection<string> _srtHosts = [];
 
     private SrtSetupInfo? _lastSrtSetup;
     private bool _uiReady;
 
-    public AddSourceWindow(IDeviceQueryService deviceQueryService, AppConfig config, ILogger logger)
+    /// <summary>Set once the host list is filled, so seeding the picker does not count as a pick and
+    /// overwrite an address the operator typed by hand.</summary>
+    private bool _srtHostsReady;
+
+    public AddSourceWindow(IDeviceQueryService deviceQueryService, AppOrchestrator orchestrator, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(deviceQueryService);
-        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(logger);
 
         InitializeComponent();
 
         _deviceQueryService = deviceQueryService;
-        _config = config;
+        _orchestrator = orchestrator;
         _logger = logger;
 
+        SrtAtemCombo.ItemsSource = _srtSenders;
+        SrtHostCombo.ItemsSource = _srtHosts;
         DeviceCombo.ItemsSource = _devices;
         WebcamFormatCombo.ItemsSource = WebcamCaptureModes.Select(m => m.Label).ToList();
         WebcamFormatCombo.SelectedIndex = 0;
@@ -89,6 +101,7 @@ public partial class AddSourceWindow : Window
 
         if (type == "SRT")
         {
+            RebuildSrtSenders();
             _ = LoadSrtSetupAsync();
         }
         else if (usesDevice)
@@ -150,11 +163,208 @@ public partial class AddSourceWindow : Window
 
         _lastSrtSetup = info;
         SrtSetupText.Text = info.InstructionsText;
-        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
-        SrtHostsList.ItemsSource = info.HostCandidates;
         SrtLatencyBox.Text = info.RecommendedLatencyMs.ToString(CultureInfo.InvariantCulture);
+
+        // Every address this PC answers on, best guess first. A PC with a VPN, a Hyper-V switch or a
+        // second NIC has several and only the one on the sender's network works, so the guess has to stay
+        // changeable rather than being the only address on offer.
+        _srtHostsReady = false;
+        _srtHosts.Clear();
+        foreach (var host in info.HostCandidates)
+        {
+            _srtHosts.Add(host);
+        }
+
+        SrtHostCombo.SelectedIndex = _srtHosts.Count > 0 ? 0 : -1;
+        SrtRecommendedUrlBox.Text = info.RecommendedUrl;
+        _srtHostsReady = true;
+        UpdateSenderHint();
+
+        // The picker may have been used before the setup lookup came back, in which case the URL it
+        // filled in was a guess at the default port; redo it now that the real port is known.
+        if (SelectedAtem() is not null)
+        {
+            ApplyAtemPreset();
+        }
+    }
+
+    private void OnSrtHostChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_srtHostsReady || SrtHostCombo.SelectedItem is not string host)
+        {
+            return;
+        }
+
+        var port = _lastSrtSetup?.ListenerPort ?? ProtocolConstants.SrtListenPort;
+        SrtRecommendedUrlBox.Text = SrtUrl.ForSender(host, port);
+        UpdateSenderHint();
+    }
+
+    /// <summary>The address the sender should dial: whatever is in the box, which starts as the
+    /// recommendation and follows the host picker until the operator types over it.</summary>
+    private string SenderUrl()
+    {
+        var typed = SrtRecommendedUrlBox.Text.Trim();
+        return typed.Length > 0 ? typed : _lastSrtSetup?.RecommendedUrl ?? string.Empty;
+    }
+
+    private void UpdateSenderHint() =>
         SrtAtemText.Text =
-            $"ATEM Mini host: {_config.AtemIp}. Set the ATEM's streaming output to Caller and enter the URL above.";
+            $"On the sender, stream to {SenderUrl()} in Caller mode. " +
+            "Picking an ATEM above sets this side up for that automatically.";
+
+    // ── SRT: the ATEM as the sender ─────────────────────────────────────────────
+
+    /// <summary>One entry of the "where is this SRT stream coming from?" list. Public because the combo
+    /// box binds <see cref="Label"/> through <c>DisplayMemberPath</c>, and WPF's binding engine will not
+    /// reach a property on a non-public type.</summary>
+    public sealed record SrtSenderOption(string Label, AtemDeviceInfo? Atem);
+
+    /// <summary>
+    /// Seeds the sender list with the ATEM the app is already set up to control, so the common case -
+    /// "receive the ON AIR output of the ATEM I just selected" - is one click and needs no scan.
+    /// </summary>
+    private void RebuildSrtSenders()
+    {
+        var previous = SelectedAtem()?.Ip;
+        var discovered = _srtSenders.Where(s => s.Atem is not null && s.Atem.Ip != ConfiguredAtem()?.Ip).ToList();
+
+        _srtSenders.Clear();
+        _srtSenders.Add(new SrtSenderOption("Something else — I will set the URL myself", null));
+
+        if (ConfiguredAtem() is { } configured)
+        {
+            _srtSenders.Add(new SrtSenderOption($"{configured.Name} — {configured.Ip}  (selected ATEM)", configured));
+        }
+
+        foreach (var option in discovered)
+        {
+            _srtSenders.Add(option);
+        }
+
+        SrtAtemCombo.SelectedItem = _srtSenders.FirstOrDefault(s => s.Atem?.Ip == previous) ?? _srtSenders[0];
+    }
+
+    /// <summary>The ATEM chosen in the ATEM settings window, if one is chosen.</summary>
+    private AtemDeviceInfo? ConfiguredAtem()
+    {
+        var config = _orchestrator.CurrentAtemConfig;
+        return string.IsNullOrWhiteSpace(config.Ip)
+            ? null
+            : new AtemDeviceInfo(config.Ip, config.Name ?? "ATEM");
+    }
+
+    private AtemDeviceInfo? SelectedAtem() => (SrtAtemCombo.SelectedItem as SrtSenderOption)?.Atem;
+
+    private void OnSrtAtemChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady)
+        {
+            return;
+        }
+
+        if (SelectedAtem() is null)
+        {
+            SrtAtemStatusText.Text = string.Empty;
+            SrtConfigureAtemButton.IsEnabled = false;
+            return;
+        }
+
+        ApplyAtemPreset();
+    }
+
+    /// <summary>
+    /// Points this side at the ATEM: the PC waits (Listener) on its SRT port and the ATEM dials in.
+    /// Listener is the right way round even though the ATEM is the sender — the PC has the stable
+    /// address here, and it is the only mode that survives the ATEM being power-cycled mid-show.
+    /// </summary>
+    private void ApplyAtemPreset()
+    {
+        if (SelectedAtem() is not { } atem)
+        {
+            return;
+        }
+
+        var port = _lastSrtSetup?.ListenerPort ?? ProtocolConstants.SrtListenPort;
+        SrtModeCombo.SelectedIndex = 0;   // Listener
+        SrtUrlBox.Text = SrtUrl.ForMode($"srt://0.0.0.0:{port}", listener: true);
+
+        if (string.IsNullOrWhiteSpace(NewSourceNameBox.Text))
+        {
+            NewSourceNameBox.Text = AtemProgramSourceName;
+        }
+
+        // "Point the ATEM here" talks over the control connection, which only exists for the ATEM the
+        // app is connected to - a switcher merely found by a scan has to be selected first.
+        var connected = _orchestrator.CurrentAtemConfig is { Enabled: true } config &&
+                        string.Equals(config.Ip, atem.Ip, StringComparison.Ordinal);
+        SrtConfigureAtemButton.IsEnabled = connected;
+
+        SrtAtemStatusText.Text = connected
+            ? $"This PC will wait for {atem.Name} on port {port}. Set that address in the ATEM's streaming settings, or press \"Point the ATEM here\"."
+            : $"This PC will wait for {atem.Name} on port {port}. Select this ATEM in the ATEM window to let the app configure it for you.";
+    }
+
+    private async void OnScanAtemsClick(object sender, RoutedEventArgs e)
+    {
+        SrtScanAtemButton.IsEnabled = false;
+        SrtAtemStatusText.Text = "Scanning for ATEMs...";
+
+        IReadOnlyList<AtemDeviceInfo> found;
+        try
+        {
+            found = await _orchestrator.DiscoverAtemDevicesAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ATEM discovery failed.");
+            SrtAtemStatusText.Text = "Scan failed.";
+            SrtScanAtemButton.IsEnabled = true;
+            return;
+        }
+
+        foreach (var device in found.Where(d => _srtSenders.All(s => s.Atem?.Ip != d.Ip)))
+        {
+            _srtSenders.Add(new SrtSenderOption($"{device.Name} — {device.Ip}", device));
+        }
+
+        SrtAtemStatusText.Text = found.Count == 0
+            ? "No ATEM answered. Check that it is powered on and on this network."
+            : $"{found.Count} ATEM(s) found — pick one above.";
+        SrtScanAtemButton.IsEnabled = true;
+    }
+
+    private async void OnConfigureAtemStreamingClick(object sender, RoutedEventArgs e)
+    {
+        // The address the ATEM is given is the one showing in the box - the operator may have picked a
+        // different NIC of this PC, or typed an address the scan cannot know.
+        var url = SenderUrl();
+        if (url.Length == 0)
+        {
+            SrtAtemStatusText.Text = "Still working out this PC's address — try again in a moment.";
+            return;
+        }
+
+        SrtConfigureAtemButton.IsEnabled = false;
+        try
+        {
+            var applied = await _orchestrator
+                .ConfigureAtemStreamingAsync(new AtemStreamingRequest(url))
+                .ConfigureAwait(true);
+
+            SrtAtemStatusText.Text = applied
+                ? $"Told the ATEM to stream to {url}. Add the source, then check the ATEM went on air."
+                : "No ATEM is connected — select one in the ATEM window first.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Configuring ATEM streaming failed.");
+            SrtAtemStatusText.Text = "Could not configure the ATEM's streaming output.";
+        }
+        finally
+        {
+            SrtConfigureAtemButton.IsEnabled = true;
+        }
     }
 
     private void OnUseRecommendedSrtUrlClick(object sender, RoutedEventArgs e)

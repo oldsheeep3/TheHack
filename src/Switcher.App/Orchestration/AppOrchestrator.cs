@@ -2,6 +2,7 @@ using System.IO;
 using Microsoft.Extensions.Logging;
 using Switcher.App.Configuration;
 using Switcher.Atem;
+using Switcher.Atem.Discovery;
 using Switcher.Contracts;
 using Switcher.Hid;
 using Switcher.Hid.Backlight;
@@ -31,12 +32,16 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     // Switcher.Atem.ButtonCommandMapping's lookup-by-ButtonEvent API, which has no other way to
     // target a specific mapping entry (docs/tasks/agent-A2-006-app-integration-v2.md: "Web DTO ->
     // 既存 AtemCommandMapping/ButtonCommandMapping への変換をApp側で行う").
+    /// <summary>Action token meaning "this switch stays a local source toggle"; see RebuildAtemMappingLocked.</summary>
+    public const string NoAtemAction = "None";
+
     private const string HidRelayControllerId = "__hid__";
     private const string DirectCommandControllerId = "__direct__";
     private const int DirectCommandButtonId = 0;
 
     private readonly IVideoEngine _engine;
     private readonly AtemController _atemController;
+    private readonly AtemDiscoveryService _atemDiscovery;
     private readonly ITallyBroadcaster _tallyBroadcaster;
     private readonly HidBacklightService _hidBacklightService;
     private BacklightCalculator _backlightCalculator = new();
@@ -84,10 +89,12 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         HidBacklightService hidBacklightService,
         RuntimeConfigStore runtimeConfigStore,
         AppConfig config,
-        ILogger<AppOrchestrator> logger)
+        ILogger<AppOrchestrator> logger,
+        AtemDiscoveryService? atemDiscovery = null)
     {
         _engine = engine;
         _atemController = atemController;
+        _atemDiscovery = atemDiscovery ?? new AtemDiscoveryService();
         _tallyBroadcaster = tallyBroadcaster;
         _hidBacklightService = hidBacklightService;
         _runtimeConfigStore = runtimeConfigStore;
@@ -115,12 +122,20 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     {
         var outputs = _runtimeConfig.OutputAssignments;
 
-        // A table saved before every-bus-needs-an-output was enforced can leave PGM2 with nowhere to go.
-        // Coming up on the defaults is better than coming up with a dead program bus, and the operator
-        // can re-route from the Outputs dock either way.
+        // A table saved before every-bus-needs-an-output was enforced can leave PGM2 with nowhere to go,
+        // and a hand-edited config can hold more sinks than the catalog allows. Coming up on the defaults
+        // is better than coming up with a dead program bus or a table the engine will reject wholesale,
+        // and the operator can re-route from the Outputs dock either way.
+        var problems = new List<string>(OutputRules.DescribeOverLimit(outputs));
         if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(outputs)) is { } missing)
         {
-            _logger.LogWarning("{Problem} Falling back to the default output routing.", missing);
+            problems.Add(missing);
+        }
+
+        if (problems.Count > 0)
+        {
+            _logger.LogWarning(
+                "{Problem} Falling back to the default output routing.", string.Join(" ", problems));
             outputs = OutputDefaults.Default;
             lock (_stateLock)
             {
@@ -312,6 +327,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    /// <summary>The definitions behind the sources the engine is running, for settings clients that have
+    /// to render an edit form (docs/specs/phone-web-bridge.md §2.2). Legacy channel-based sources have no
+    /// definition and so do not appear.</summary>
+    public Task<IReadOnlyList<SourceDefinition>> GetSourceDefinitionsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult<IReadOnlyList<SourceDefinition>>([.. _sourceDefinitions.Values]);
+        }
+    }
+
     public Task ApplyProgramAsync(ProgramRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -451,12 +477,26 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    public Task<MultiviewLayout> GetMultiviewLayoutAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult(CurrentMultiviewLayout);
+        }
+    }
+
     public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         // Guarded here as well as in the Web validator, because the operator window applies outputs
-        // directly and must not be able to leave a program bus going nowhere.
+        // directly and must not be able to leave a program bus going nowhere - or, since the table
+        // became operator-editable, to exceed the per-kind/total ceilings the catalog defines.
+        if (OutputRules.DescribeOverLimit(request.Outputs) is { Count: > 0 } overLimit)
+        {
+            throw new ArgumentException(string.Join(" ", overLimit), nameof(request));
+        }
+
         if (OutputRules.DescribeMissingBuses(OutputRules.MissingBuses(request.Outputs)) is { } missing)
         {
             throw new ArgumentException(missing, nameof(request));
@@ -471,6 +511,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         WarnAboutDeadBuses();
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>The output table in force. Read from the persisted config rather than the engine so it
+    /// answers before the engine has started (settings clients poll from the moment the web host is up).
+    /// </summary>
+    public Task<OutputsRequest> GetOutputsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult(new OutputsRequest(_runtimeConfig.OutputAssignments));
+        }
     }
 
     /// <summary>Program buses whose sinks are all assigned but none running — an NDI sink with no NDI
@@ -513,22 +564,83 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    public Task<ModulesRequest> GetModulesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ModulesRequest(CurrentModuleMappings));
+
+    /// <summary>The ATEM connection settings and button mappings currently in force.</summary>
+    public AtemConfig CurrentAtemConfig
+    {
+        get { lock (_stateLock) { return _runtimeConfig.AtemConfig; } }
+    }
+
+    /// <summary>Raised after <see cref="ApplyAtemConfigAsync"/> so open UI reflects a change made
+    /// from the other control surface (the settings window vs. the Web API).</summary>
+    public event EventHandler<AtemConfig>? AtemConfigChanged;
+
     public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        bool reconnect;
         lock (_stateLock)
         {
+            // Only redial when the target actually moved. Re-applying the same address on every mapping
+            // edit would tear down a working session and re-run the handshake mid-show.
+            reconnect = config.Enabled
+                && !string.IsNullOrWhiteSpace(config.Ip)
+                && (!string.Equals(config.Ip, _atemController.TargetIp, StringComparison.Ordinal)
+                    || _atemController.State == AtemConnectionState.Disconnected);
+
             SaveRuntimeConfigLocked(_runtimeConfig with { AtemConfig = config });
             RebuildAtemMappingLocked();
 
-            if (config.Enabled && !string.IsNullOrWhiteSpace(config.Ip))
+            if (reconnect)
             {
                 _atemController.Connect(config.Ip);
             }
         }
 
+        AtemConfigChanged?.Invoke(this, config);
         return Task.CompletedTask;
+    }
+
+    public Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentAtemConfig);
+
+    public Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default) =>
+        _atemDiscovery.DiscoverAsync(cancellationToken);
+
+    /// <summary>Checks one address the operator typed in rather than sweeping the whole subnet.</summary>
+    public Task<AtemDeviceInfo?> ProbeAtemDeviceAsync(string ip, CancellationToken cancellationToken = default) =>
+        _atemDiscovery.ProbeAsync(ip, cancellationToken);
+
+    public Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return Task.FromResult(_atemController.TrySendStreamingSetup(request));
+    }
+
+    /// <summary>
+    /// Opens the control connection to whichever ATEM the operator selected, if any. Called once by the
+    /// app host during startup. An ATEM that is not enabled is not dialled: the client would otherwise
+    /// spend the whole session retrying a hello against an address nobody chose.
+    /// </summary>
+    public void ConnectConfiguredAtem()
+    {
+        AtemConfig config;
+        lock (_stateLock)
+        {
+            config = _runtimeConfig.AtemConfig;
+        }
+
+        if (!config.Enabled || string.IsNullOrWhiteSpace(config.Ip))
+        {
+            _logger.LogInformation("No ATEM selected; the remote-control client stays idle.");
+            return;
+        }
+
+        _logger.LogInformation("Connecting ATEM client to {AtemIp}.", config.Ip);
+        _atemController.Connect(config.Ip);
     }
 
     public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)
@@ -852,6 +964,9 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         get { lock (_stateLock) { return _runtimeConfig.AudioOutputList; } }
     }
 
+    public Task<AudioOutputsRequest> GetAudioOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AudioOutputsRequest(CurrentAudioOutputs));
+
     /// <summary>Audio render endpoints this machine can play to.</summary>
     public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => _engine.QueryAudioDevices();
 
@@ -995,6 +1110,14 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
 
         foreach (var mapping in _runtimeConfig.AtemConfig.Mappings)
         {
+            // The settings window writes a row per module switch and leaves the unassigned ones blank,
+            // so "no action here" is expected input, not something to warn about.
+            if (string.IsNullOrWhiteSpace(mapping.Action) ||
+                mapping.Action.Equals(NoAtemAction, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             if (TryParseSwitch(mapping.Switch, out var switchId) &&
                 Enum.TryParse<AtemAction>(mapping.Action, ignoreCase: true, out var action))
             {

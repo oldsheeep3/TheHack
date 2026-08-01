@@ -5,6 +5,7 @@ using Switcher.App.Logging;
 using Switcher.App.Orchestration;
 using Switcher.App.Services;
 using Switcher.Atem;
+using Switcher.Atem.Discovery;
 using Switcher.Contracts;
 using Switcher.Engine;
 using Switcher.Hid;
@@ -59,6 +60,9 @@ public static class ServiceCollectionExtensions
         // so the mapping this is seeded with is never actually used.
         services.AddSingleton(ButtonCommandMapping.Empty);
         services.AddSingleton<AtemController>();
+
+        // Network sweep behind the ATEM picker, so the operator selects a switcher instead of typing an IP.
+        services.AddSingleton<AtemDiscoveryService>();
 
         // Switcher.Hid: HidBacklightService is a dependency of AppOrchestrator (backlight send-out);
         // HidInputService's edges are subscribed to the orchestrator once both sides exist.

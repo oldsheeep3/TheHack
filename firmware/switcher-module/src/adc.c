@@ -1,5 +1,8 @@
 // adc.h のI/O実装。VR_ADC_CHANNELS(VR_SRC1,VR_SRC2)をfunAnalogReadで走査し、生値を
 // adc_scale.c (ADC非依存) にそのまま渡し、スケーリング済み値のみをここで保持する。
+// 実配線は VR_SRC1=基板VOL1=5pin(PA1)=ADCチャネル1 / VR_SRC2=基板VOL2=6pin(PA2)=
+// ADCチャネル0 (CH32V003のアナログチャネル割当。funAnalogRead()はピン番号ではなく
+// チャネル番号を取る)。
 
 #include "adc.h"
 

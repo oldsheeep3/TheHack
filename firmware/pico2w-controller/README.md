@@ -6,7 +6,8 @@ Raspberry Pi Pico 2W (`pico2_w`, RP2350 + CYW43) 向けマスターコントロ�
 
 ## 役割
 
-全スイッチングモジュール(CH32V003, `0x30`..`0x37`)を **I2Cマスター**として定期ポーリングして
+全スイッチングモジュール(CH32V003, スロットごとに専用I2Cバス1本・アドレスは全台`0x30`)を
+**I2Cマスター**として定期ポーリングして
 SW/VR状態を集約し、**ベンダー定義USB-HID**の入力レポート`0x01`でPCへ送出する。
 物理キーマトリクス走査とHDMI DDCタリー抽出(旧実装)は本タスクで**廃止**し、前者はモジュール
 (CH32V003)側へ移管、後者は外部タリーデバイスが担当する。
@@ -26,8 +27,13 @@ firmware/pico2w-controller/
 │   ├── board_id.c            # get_unique_board_id() (pico_unique_id使用, Pico SDK依存)
 │   ├── state_agg.h           # モジュール状態配列/入力レポートパッキングの公開API
 │   ├── state_agg.c           # 入力レポート0x01パッキング + VRデッドバンド判定 (Pico SDK非依存, ホストテスト対象)
+│   ├── module_bus.h          # スロットごとのI2Cバス定義 (SDA/SCL) の公開API
+│   ├── module_bus.c          # バス定義の実体 + GPIO→I2Cコントローラの純粋変換 (Pico SDK非依存, ホストテスト対象)
 │   ├── i2c_modules.h         # I2Cポーリング + バックライト書込の公開API
-│   ├── i2c_modules.c         # 0x30..0x37の定期ポーリング + 0x10 BACKLIGHT書込 (ハードウェアI2C依存)
+│   ├── i2c_modules.c         # 全バス(スロット)の定期ポーリング + 0x10 BACKLIGHT書込 (ハードウェアI2C依存)
+│   ├── fake_modules.h        # デバッグ用fakeモジュール層の公開API (ENABLE_FAKE_MODULESビルドのみ)
+│   ├── fake_modules_codec.c  # デバッグ用出力レポート0x04のパース/適用 (Pico SDK非依存, ホストテスト対象)
+│   ├── i2c_modules_fake.c    # i2c_modules.c の差し替え: I2Cを使わずRAM上の偽モジュールで応答する
 │   ├── backlight.h           # 出力レポート0x02のコマンド型 + パース/キュー/I2C書込API
 │   ├── backlight_codec.c     # 出力レポート0x02のパース (Pico SDK非依存, ホストテスト対象)
 │   ├── backlight.c           # 受領キュー + I2C `0x10 BACKLIGHT` 書込 (I2C依存)
@@ -43,21 +49,60 @@ firmware/pico2w-controller/
     ├── Makefile
     ├── test_config.c
     ├── test_config_sub.c
+    ├── test_module_bus.c      # スロット→SDA/SCL GPIOの割当・重複無し・RP2xxxのI2Cピン規則適合
     ├── test_state_agg.c       # 入力レポートパッキング(module_present/SW/VR位置/seq)・VRデッドバンド判定
     ├── test_backlight.c       # 出力レポート0x02のパース(RGBバイト順・範囲外module_index棄却)
     ├── test_settings.c        # 設定シリアライズ往復・破損検出・controller_idフォールバック
-    └── test_wireless_codec.c  # STATE/BACKLIGHTフレームのエンコード/デコード(state_agg/backlight_codecへの委譲含む)
+    ├── test_wireless_codec.c  # STATE/BACKLIGHTフレームのエンコード/デコード(state_agg/backlight_codecへの委譲含む)
+    └── test_fake_modules.c    # デバッグ用出力レポート0x04のパース・モジュール状態への適用
 ```
 
 `state_agg_*`/`i2c_modules_*`/`usb_hid_*`/`backlight_*`/`settings_*`/`wireless_*` はすべて実装済み。
 
 ## I2C / USB-HID 契約の概要
 
-- **I2C** (`config.h`, 親仕様書 §4.5): Pico=マスター、モジュール=スレーブ。アドレス
-  `0x30`+モジュール番号(0..7)。`0x00 STATE`(read 3バイト: SW下位4bit/VR_SRC1/VR_SRC2)を
-  ポーリング対象、`0x10 BACKLIGHT`(write 12)/`0xF0 INFO`(read 4)は本タスクでは未使用(契約のみ)。
-  1モジュールのタイムアウト/NACKはそのモジュールだけスキップし、他モジュールのポーリングは
+- **I2C** (`config.h`/`module_bus.c`, 親仕様書 §4.5): Pico=マスター、モジュール=スレーブ。
+  実基板 `softswitcher_module_master` は**モジュール1台につき専用のI2Cバスを1本**引き出す
+  (`MODULE_BUS_COUNT`=5)。モジュール側にアドレスストラップが無く全台が `MODULE_I2C_ADDR`(0x30)
+  で待ち受けるため、**モジュール番号(HIDレポートのスロット位置) = バス番号**となる。
+
+  | バス | Pico実装ピン | GPIO (SDA/SCL) | コントローラ | 経路 |
+  | --- | --- | --- | --- | --- |
+  | 1 | 26pin / 27pin | 20 / 21 | i2c0 | 1x07コネクタ (数珠つなぎの先頭) |
+  | 2 | 31pin / 32pin | 26 / 27 | i2c1 | 2x08コネクタ |
+  | 3 | 6pin / 7pin | 4 / 5 | i2c0 | 2x08コネクタ |
+  | 4 | 4pin / 5pin | 2 / 3 | i2c1 | 2x08コネクタ |
+  | 5 | 1pin / 2pin | 0 / 1 | i2c0 | 2x08コネクタ |
+
+  I2Cコントローラは2基しか無いため、同じコントローラを共有するバス(i2c0: 1,3,5 / i2c1: 2,4)は
+  ピン機能を `GPIO_FUNC_I2C` / `GPIO_FUNC_NULL` で付け替えて時分割する。非選択バスのピンは
+  内蔵プルアップでHigh(アイドル)に保たれるため、そのバスのモジュールはバスが静止しているだけで
+  状態を保持する。外付けプルアップ抵抗が基板・モジュールとも無いため、バスクロック
+  `MODULE_I2C_BAUD` の既定は100kHz(外付けプルアップを実装したら引き上げ可)。
+
+  `0x00 STATE`(read 3バイト: SW下位4bit/VR_SRC1/VR_SRC2)がポーリング対象、
+  `0x10 BACKLIGHT`(write 12)はバックライト配布で使用、`0xF0 INFO`(read 4)は未使用(契約のみ)。
+  1モジュールのタイムアウト/NACKはそのモジュールだけスキップし、他バスのポーリングは
   継続する(`i2c_modules.c`)。
+
+  **モジュールとの通信はソフトウェアI2C(ビットバン)で行う**(`MODULE_I2C_SOFTWARE`, 既定ON)。
+  実機ではハードウェアI2Cブロックを使うとモジュール(CH32V003)がアドレスにACKを返さず、
+  同じピン・同じ速度でもSIOで直接叩くビットバンなら100%応答する、という事象があったため
+  (原因未特定。マスター側の設定・配線・スレーブ側のレジスタ設定はすべて実機で正常を確認済み)。
+  クロックストレッチに対応しており、モジュールがSK6812駆動中に割込みを止めていても取りこぼさない。
+  ハードウェアI2C版の実装も残してあるので `-DMODULE_I2C_SOFTWARE=OFF` で切り戻せる。
+  ビットバンのビットレートは `SWM_QUARTER_US`(約20kHz)。全5スロット一巡は約14ms。
+
+  **`i2c_modules_poll()` は1回の呼び出しで1バスだけ進める**(ラウンドロビン)。全バスを一気に
+  舐めると不在バスのタイムアウトが積み上がり、1回の呼び出しが数十msブロックしてメイン
+  ループの `tud_task()`(USB応答)を圧迫するため。また各トランザクションの前に
+  **SDA/SCLがHigh(アイドル)かをパッドの入力レベルで確認**し、Lowに張り付いているバスは
+  触らずにスキップする。これは実機で踏んだ問題への対策で、バスがLowのままだとI2C
+  コントローラが転送を開始できずタイムアウトを繰り返し、TX FIFOに積み残しが溜まると
+  Pico SDK の読み出し実装にある唯一のタイムアウト無しループ
+  (`i2c.c` の `while (!i2c_get_write_available(i2c))`)が抜けなくなって**USB列挙ごと停止する**
+  (`Device Descriptor Request Failed`)。失敗したトランザクションの後はコントローラを
+  `i2c_init()` で初期化し直し、掴んだままのバス状態や積み残しを次のバスへ持ち越さない。
 - **USB-HID** (親仕様書 §4.1): ベンダー定義HID。入力レポート`0x01`(長さ
   `HID_REPORT_STATE_IN_LEN` = `1 + MAX_MODULES + 2*MAX_MODULES + 1`バイト)で
   `module_present`ビットマップ・各モジュールSW状態・各モジュールVR値・`seq`を送出する。
@@ -70,7 +115,15 @@ firmware/pico2w-controller/
 
 - PCが出力レポート`0x02`(`module_index`(1) + 4灯分RGB(12) = `HID_REPORT_BACKLIGHT_OUT_LEN`
   バイト)を送出すると、`usb_hid.c`の`tud_hid_set_report_cb`が`backlight_on_output_report()`
-  (`backlight.c`)へ委譲する。パース(`backlight_parse_output_report`, `backlight_codec.c`)は
+  (`backlight.c`)へ委譲する。
+- **TinyUSBの引数の形が経路で異なる点に注意**: 制御転送(SET_REPORT)では実際の`report_id`と
+  Report ID除去済みのボディが渡るが、割込みOUTエンドポイント経由では`report_id=0`固定で
+  Report IDを含んだ生バッファが渡る(`lib/tinyusb/src/class/hid/hid_device.c`)。ホスト
+  (Windows)は出力レポートを後者で送るため、`report_id`だけで振り分けると出力レポートが一切
+  届かない。`tud_hid_set_report_cb`の冒頭で前者の形へ揃えてから振り分けている。
+- ホストは短い出力レポートをデバイスの最大出力レポート長までゼロパディングして送ってくる。
+  `0x02`(13バイト)が最大長のため`0x02`自身は影響を受けないが、これより短い出力レポートを
+  追加する場合は長さを完全一致で検証してはならない。パース(`backlight_parse_output_report`, `backlight_codec.c`)は
   範囲外`module_index`・長さ不一致を棄却し、RGBバイト順はそのまま保持する(SK6812の
   GRB変換はモジュール側で実施)。
 - パース成功分は受領キュー(`backlight.c`, 8件FIFO, 溢れ時は最古を破棄)へ積むのみで
@@ -165,6 +218,33 @@ Picoを再起動すると`wireless_init`がフラッシュから読み出した�
 5. Wi-Fi接続を切断し、指数バックオフで再接続が試みられること、その間もUSB-HID経路の
    SW/VR状態送出が滞留しないことを確認する(障害隔離)。
 
+### デバッグ用 fake モジュール層 (任意, 実機モジュール不要)
+
+実機のスイッチングモジュール(CH32V003)が1台も無い状態で、SW/VR集約・HID経路・バックライト
+配布を通しで検証するための開発専用ビルド。`-DENABLE_FAKE_MODULES=ON` を指定すると
+`src/i2c_modules.c` の代わりに `src/i2c_modules_fake.c` がリンクされ、I2Cバスの代わりに
+PCからのデバッグ用HIDレポートがモジュール状態を供給する。
+
+- **ビルド切替**: デフォルトOFF。OFFのビルドには偽モジュール層もデバッグ用レポートも一切
+  含まれず、HID記述子(§4.1)も変化しない。
+- **デバッグ用レポート**: 出力`0x04`(`module_index` + `present` + `switches` + VR×2)でPCから
+  1モジュール分の状態を注入し、feature `0x05`(`module_index` + 4灯分RGB)で
+  `backlight_task()` が最後に「配布」したバックライトを読み出す。
+- **入力レポートは`0x01`のまま**にしてある。PC側(`src/Switcher.Hid/Devices/HidSharpDevice.cs`)が
+  入力レポートの先頭Report IDを無条件に剥がす実装のため、入力レポートを増やすとこのビルドを
+  本番アプリへ繋いだときに状態レポートとして誤解釈されてしまう。そのためバックライトの
+  読み出しは入力ではなくfeatureにしている。
+- **`main.c` は無改変**。fake層は `i2c_modules.h` の契約をそのまま実装するため、メインループ側に
+  分岐が無い。
+
+```sh
+cmake -B build-fake -DPICO_BOARD=<board> -DENABLE_FAKE_MODULES=ON
+cmake --build build-fake
+```
+
+ブラウザからSW/VRを操作するGUIは [`tools/module-simulator`](../../tools/module-simulator/README.md)
+にある(検証できる範囲/できない範囲もそちらに記載)。
+
 ## クロスビルド (Pico SDK 必要)
 
 このリポジトリのサンドボックス環境には Pico SDK / `arm-none-eabi` ツールチェーン / `cmake` が
@@ -189,20 +269,31 @@ CYW43/lwIPはリンクされない。
 
 ## 実機での手動確認手順
 
-`i2c_modules.c` のI2Cポーリングと `usb_hid.c` のベンダーHID記述子一式は、この開発環境に
-実機(Pico 2W・スイッチングモジュール×N)が無いため**未検証**。書き込み後は以下の手順で確認する:
+`i2c_modules.c` のI2Cポーリング(=実機モジュールとのI2C通信そのもの)は、スイッチングモジュール
+(CH32V003)が手元に無いため**未検証**。
 
-1. 仕様書 §5 の結線(モジュールのI2C `SDA`/`SCL` を Pico 2W の `MODULE_I2C_SDA_PIN`/
-   `MODULE_I2C_SCL_PIN` へマルチドロップ接続、アドレスはモジュールのストラップで`0x30`+番号に
-   設定)を行う。
+一方、`usb_hid.c` のベンダーHID記述子一式・入力レポート`0x01`の集約/送出・出力レポート`0x02`の
+バックライト配布経路は、RP2040実機 + [`tools/module-simulator`](../../tools/module-simulator/README.md)
+(`-DENABLE_FAKE_MODULES=ON` ビルド)で**確認済み**(下記手順2・3・4・6相当)。この検証で
+`tud_hid_set_report_cb` の振り分けが割込みOUT経由の出力レポートを取りこぼす不具合が見つかり、
+修正済み(「バックライト配布」の節参照)。
+
+書き込み後は以下の手順で確認する:
+
+1. 仕様書 §5 の結線(モジュールをマスター基板のコネクタへ数珠つなぎで接続する。先頭が1x07の
+   バス1、以降2x08経由でバス2..5。上表の `MODULE_BUSES` と一致していることを確認する)を行う。
+   モジュール側はアドレス`0x30`固定で、番号設定用のストラップは無い。
 2. PCとUSB接続し、OS側のHID一覧(例: Linuxなら `lsusb`/`hidraw`、WindowsならUSBデバイスツリー)で
    ベンダー定義HIDデバイスとして列挙され、シリアル番号文字列が
    `<unique_board_id>-<controller_id>` になっていることを確認する。
 3. モジュールを1台のみ接続した状態で入力レポート`0x01`を読み取り、`module_present`ビットマップの
    該当ビットのみが立つこと、SWを押下/VRを回した際に対応バイトが追従すること、`seq`が送出ごとに
-   ローテートすることを確認する。
+   ローテートすることを確認する。次にモジュールを2段目・3段目…へ挿し替え、立つビットが
+   スロット位置(バス番号)どおりに移動することを確認する(モジュール番号=バス番号)。
 4. モジュールを未接続のまま起動し、ポーリングが詰まらず他の接続済みモジュールの状態送出が継続
-   することを確認する(1モジュール不通時の障害隔離)。
+   することを確認する(1モジュール不通時の障害隔離)。同一I2Cコントローラを共有するバス
+   (i2c0: 1,3,5 / i2c1: 2,4)に同時にモジュールを挿し、両方が並行して更新され続けること
+   (時分割のピン切替が破綻していないこと)も確認する。
 5. デバッグ用の初期化ログ(`controller_id=...`)はUART stdio経由(`pico_enable_stdio_uart`)に
    出力される。USBはベンダーHID専用のためCDCシリアルとしては見えない。
 6. **バックライト配布**: PCからHID出力レポート`0x02`(`module_index` + 4灯分RGB)を送出し、
@@ -218,8 +309,9 @@ CYW43/lwIPはリンクされない。
 
 ## ホストテスト (Pico SDK 不要, このリポジトリで検証済み)
 
-I/O に依存しないロジック(`config.h` の定数、`get_controller_id()`、入力レポートパッキング/
-VRデッドバンド判定、出力レポート`0x02`パース、設定シリアライズ/破損検出、ワイヤレス
+I/O に依存しないロジック(`config.h` の定数、`get_controller_id()`、スロットごとのI2Cバス定義
+(`module_bus.c`)、入力レポートパッキング/VRデッドバンド判定、出力レポート`0x02`パース、
+設定シリアライズ/破損検出、ワイヤレス
 STATE/BACKLIGHTフレームのエンコード/デコード)はホストの `gcc` でネイティブビルド・実行して
 テストする。CYW43/lwIP依存のI/O部(`wireless.c`)はこのホストテスト対象外(実機/SDK環境が
 必要, 「ワイヤレス制御チャネル」節の手動確認手順を参照)。

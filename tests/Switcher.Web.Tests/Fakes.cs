@@ -15,13 +15,38 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     public List<AudioOutputsRequest> AppliedAudioOutputs { get; } = [];
     public List<AtemConfig> AppliedAtemConfigs { get; } = [];
     public List<AtemCommandRequest> SentAtemCommands { get; } = [];
+    public List<AtemStreamingRequest> AtemStreamingRequests { get; } = [];
     public List<PicoNetworkConfig> AppliedPicoNetworkConfigs { get; } = [];
+
+    /// <summary>What GET /api/v1/atem reports back.</summary>
+    public AtemConfig CurrentAtemConfig { get; set; } = new(Enabled: false, Ip: string.Empty, Mappings: []);
+
+    /// <summary>What the read-back endpoints report as the configuration currently in force.</summary>
+    public List<SourceDefinition> CurrentSourceDefinitions { get; } = [];
+
+    public MultiviewLayout CurrentMultiviewLayout { get; set; } =
+        new([.. Enumerable.Repeat("EMPTY", 16)]);
+
+    public List<OutputAssignment> CurrentOutputs { get; } = [.. OutputDefaults.Default];
+
+    public List<AudioOutputAssignment> CurrentAudioOutputs { get; } = [];
+
+    public List<ModuleMapping> CurrentModules { get; } = [];
+
+    /// <summary>What a discovery sweep is pretending to have found.</summary>
+    public List<AtemDeviceInfo> DiscoverableAtems { get; } = [];
+
+    /// <summary>Whether <see cref="ConfigureAtemStreamingAsync"/> reports a connected switcher.</summary>
+    public bool AtemStreamingSucceeds { get; set; } = true;
 
     public Task ApplyConfigAsync(ConfigChangeRequest request, CancellationToken cancellationToken = default)
     {
         Received.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<SourceDefinition>> GetSourceDefinitionsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SourceDefinition>>(CurrentSourceDefinitions);
 
     public Task AddSourceAsync(SourceDefinition source, CancellationToken cancellationToken = default)
     {
@@ -53,11 +78,17 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<MultiviewLayout> GetMultiviewLayoutAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentMultiviewLayout);
+
     public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
     {
         AppliedOutputs.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<OutputsRequest> GetOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new OutputsRequest(CurrentOutputs));
 
     public Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default)
     {
@@ -65,16 +96,34 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<AudioOutputsRequest> GetAudioOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AudioOutputsRequest(CurrentAudioOutputs));
+
     public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
     {
         AppliedModules.Add(request);
         return Task.CompletedTask;
     }
 
+    public Task<ModulesRequest> GetModulesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ModulesRequest(CurrentModules));
+
     public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
     {
         AppliedAtemConfigs.Add(config);
         return Task.CompletedTask;
+    }
+
+    public Task<AtemConfig> GetAtemConfigAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentAtemConfig);
+
+    public Task<IReadOnlyList<AtemDeviceInfo>> DiscoverAtemDevicesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AtemDeviceInfo>>(DiscoverableAtems);
+
+    public Task<bool> ConfigureAtemStreamingAsync(AtemStreamingRequest request, CancellationToken cancellationToken = default)
+    {
+        AtemStreamingRequests.Add(request);
+        return Task.FromResult(AtemStreamingSucceeds);
     }
 
     public Task SendAtemCommandAsync(AtemCommandRequest command, CancellationToken cancellationToken = default)

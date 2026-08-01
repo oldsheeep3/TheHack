@@ -70,8 +70,9 @@ public sealed class AppHostService
         _orchestrator.RestorePersistedSources();
         _orchestrator.RestorePersistedAudio();
 
-        _logger.LogInformation("Connecting ATEM client to {AtemIp}.", _config.AtemIp);
-        _atemController.Connect(_config.AtemIp);
+        // Which ATEM (if any) to dial is the operator's persisted choice from the ATEM settings window,
+        // not a build-time constant - so the orchestrator owns the decision.
+        _orchestrator.ConnectConfiguredAtem();
 
         try
         {
