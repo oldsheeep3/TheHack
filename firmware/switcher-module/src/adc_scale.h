@@ -8,8 +8,7 @@
 // ch32v003fun/ADCペリフェラルに依存しないため、ホストのgccでそのままビルド・
 // テストできる (test/test_adc_scale.c 参照)。
 
-// CH32V003 ADCの分解能 (10bit: 0..1023)。module_config.h の
-// MODULE_STRAP_ADC_MAX と同じ物理ADCの分解能だが、VRスケーリングの純粋部を
+// CH32V003 ADCの分解能 (10bit: 0..1023)。VRスケーリングの純粋部を
 // module_config.h(GPIO/ADCチャネル定義)に依存させないためここで独立定義する。
 #define ADC_SCALE_RAW_BITS 10
 #define ADC_SCALE_RAW_MAX ((1u << ADC_SCALE_RAW_BITS) - 1)

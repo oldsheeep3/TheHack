@@ -22,6 +22,10 @@
 #include "config.h"
 #include "settings.h"
 
+#ifdef FAKE_MODULES
+#include "fake_modules.h"
+#endif
+
 // TinyUSBがOSSプロジェクトのテスト用途に公開している共有VID/PID。
 // 量産時は独自のUSB VID/PIDを取得して差し替えること(TODO, 実機検証未了)。
 #define USB_VID 0xCafe
@@ -82,6 +86,36 @@ static uint8_t const desc_hid_report[] = {
     0x75, 0x08,                           //   Report Size (8)
     0x95, SETTINGS_SERIALIZED_LEN,        //   Report Count
     0xB1, 0x02,                           //   Feature (Data,Var,Abs)
+
+#ifdef FAKE_MODULES
+    // デバッグ用(FAKE_MODULESビルドのみ)。本番ビルドの記述子には現れないため、PC側から見た
+    // レポート契約(§4.1)は変わらない。
+    0x85, HID_REPORT_ID_FAKE_MODULE_OUT,  //   Report ID (4): PC→Pico 偽モジュール状態の注入
+    0x09, 0x05,                           //   Usage (0x05)
+    0x15, 0x00,                           //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,                      //   Logical Maximum (255)
+    0x75, 0x08,                           //   Report Size (8)
+    0x95, HID_REPORT_FAKE_MODULE_OUT_LEN, //   Report Count
+    0x91, 0x02,                           //   Output (Data,Var,Abs)
+
+    0x85, HID_REPORT_ID_FAKE_REBOOT_OUT,  //   Report ID (6): PC→Pico BOOTSELへ再起動
+    0x09, 0x07,                           //   Usage (0x07)
+    0x15, 0x00,                           //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,                      //   Logical Maximum (255)
+    0x75, 0x08,                           //   Report Size (8)
+    0x95, HID_REPORT_FAKE_REBOOT_OUT_LEN, //   Report Count
+    0x91, 0x02,                           //   Output (Data,Var,Abs)
+
+    // 入力レポートは0x01の1種類に保つため、配布バックライトの読出はfeatureにする
+    // (理由はconfig.hのHID_REPORT_FAKE_BACKLIGHT_FEATURE_LENのコメント参照)。
+    0x85, HID_REPORT_ID_FAKE_BACKLIGHT_FEATURE,  //   Report ID (5): PC←Pico 配布バックライトの読出
+    0x09, 0x06,                                  //   Usage (0x06)
+    0x15, 0x00,                                  //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,                             //   Logical Maximum (255)
+    0x75, 0x08,                                  //   Report Size (8)
+    0x95, HID_REPORT_FAKE_BACKLIGHT_FEATURE_LEN, //   Report Count
+    0xB1, 0x02,                                  //   Feature (Data,Var,Abs)
+#endif
 
     0xC0, // End Collection
 };
@@ -190,6 +224,11 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
     if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_REPORT_ID_SETTINGS_FEATURE) {
         return settings_build_feature_report(buffer, reqlen);
     }
+#ifdef FAKE_MODULES
+    if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_REPORT_ID_FAKE_BACKLIGHT_FEATURE) {
+        return fake_modules_build_backlight_feature_report(buffer, reqlen);
+    }
+#endif
     return 0;
 }
 
@@ -199,11 +238,30 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
                             uint8_t const *buffer, uint16_t bufsize) {
     (void)instance;
+
+    // TinyUSBは呼び出し元によって引数の形が違う(lib/tinyusb/src/class/hid/hid_device.c):
+    //   - 制御転送(SET_REPORT): 実際のreport_id + Report IDを除去済みのボディ
+    //   - 割込みOUTエンドポイント: report_id=0 固定 + Report IDを含んだ生バッファ
+    // ホスト(Windows)は出力レポートを後者で送ってくるため、report_idだけで振り分けると
+    // 出力レポートが一切届かない。ここで前者の形へ揃えてから振り分ける。
+    if (report_id == 0 && bufsize >= 1) {
+        report_id = buffer[0];
+        buffer++;
+        bufsize--;
+    }
+
     if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == HID_REPORT_ID_BACKLIGHT_OUT) {
         backlight_on_output_report(buffer, bufsize);
     } else if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_REPORT_ID_SETTINGS_FEATURE) {
         settings_on_feature_report(buffer, bufsize);
     }
+#ifdef FAKE_MODULES
+    else if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == HID_REPORT_ID_FAKE_MODULE_OUT) {
+        fake_modules_on_debug_report(buffer, bufsize);
+    } else if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == HID_REPORT_ID_FAKE_REBOOT_OUT) {
+        fake_modules_on_reboot_report(buffer, bufsize);
+    }
+#endif
 }
 
 // ---- 公開API ----
@@ -224,3 +282,4 @@ void usb_hid_send_state(const module_state_array_t *states, uint8_t seq) {
     state_agg_pack(states, seq, report);
     tud_hid_report(HID_REPORT_ID_STATE_IN, report, sizeof(report));
 }
+

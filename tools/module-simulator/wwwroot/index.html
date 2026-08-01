@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>module simulator</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+         background: #16181d; color: #e6e8ec; }
+  h1 { font-size: 16px; margin: 0 0 12px; font-weight: 600; }
+  .bar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 8px 12px;
+         background: #1e2128; border: 1px solid #2c313a; border-radius: 6px; margin-bottom: 16px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px;
+         vertical-align: middle; background: #6b7280; }
+  .dot.on { background: #22c55e; }
+  .dot.off { background: #ef4444; }
+  .stat { color: #9aa3b2; }
+  .stat b { color: #e6e8ec; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .err { color: #f87171; }
+  .warn { color: #fbbf24; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .mod { background: #1e2128; border: 1px solid #2c313a; border-radius: 6px; padding: 12px; }
+  .mod.absent { opacity: .5; }
+  .mod header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .mod h2 { font-size: 13px; margin: 0; font-weight: 600; }
+  .addr { color: #6b7280; font-weight: 400; }
+  .sw { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+  button.swbtn { padding: 8px 4px; border-radius: 4px; border: 1px solid #3a414d; background: #262a33;
+                 color: #cbd2dd; cursor: pointer; font: inherit; }
+  button.swbtn.on { background: #2563eb; border-color: #3b82f6; color: #fff; }
+  button.swbtn:active { transform: translateY(1px); }
+  label.vr { display: block; margin-bottom: 8px; }
+  label.vr span { display: flex; justify-content: space-between; color: #9aa3b2; margin-bottom: 2px; }
+  label.vr b { color: #e6e8ec; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; }
+  .toggle { display: flex; align-items: center; gap: 6px; color: #9aa3b2; cursor: pointer; user-select: none; }
+  .bl { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+  .bl .sw4 { display: flex; gap: 4px; }
+  .bl i { width: 20px; height: 20px; border-radius: 3px; border: 1px solid #3a414d; background: #111; }
+  .bl small { color: #6b7280; }
+  .read { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2c313a;
+          color: #6b7280; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  .read.mismatch { color: #fbbf24; }
+</style>
+</head>
+<body>
+
+<h1>pico2w-controller module simulator</h1>
+
+<div class="bar">
+  <span><span id="dot" class="dot"></span><span id="conn">接続確認中…</span></span>
+  <span class="stat">seq <b id="seq">–</b></span>
+  <span class="stat">受信レポート <b id="count">0</b></span>
+  <span class="stat">seq 欠落 <b id="gaps">0</b></span>
+  <span class="stat">module_present <b id="present">0x00</b></span>
+  <span id="err" class="err"></span>
+  <span id="blwarn" class="warn"></span>
+  <button id="reboot" class="swbtn" style="margin-left:auto">BOOTSEL で再起動</button>
+</div>
+
+<div id="grid" class="grid"></div>
+
+<script>
+const MAX_MODULES = 8;
+const SW_KEYS = [
+  ['pgm1Src1', 'PGM1 / SRC1'],
+  ['pgm1Src2', 'PGM1 / SRC2'],
+  ['pgm2Src1', 'PGM2 / SRC1'],
+  ['pgm2Src2', 'PGM2 / SRC2'],
+];
+
+// Desired state we push to the Pico. Kept separate from the state read back from the device so
+// that polling never fights a slider being dragged.
+const desired = [];
+for (let i = 0; i < MAX_MODULES; i++) {
+  desired.push({ present: false, pgm1Src1: false, pgm1Src2: false, pgm2Src1: false, pgm2Src2: false,
+                 vrSrc1: 0, vrSrc2: 0 });
+}
+
+const el = {};
+
+function buildModule(i) {
+  const d = desired[i];
+  const card = document.createElement('div');
+  card.className = 'mod absent';
+
+  const head = document.createElement('header');
+  const h = document.createElement('h2');
+  h.innerHTML = `モジュール ${i} <span class="addr">0x${(0x30 + i).toString(16)}</span>`;
+  const toggle = document.createElement('label');
+  toggle.className = 'toggle';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.onchange = () => { d.present = cb.checked; push(i); };
+  toggle.append(cb, document.createTextNode('接続'));
+  head.append(h, toggle);
+  card.append(head);
+
+  const sw = document.createElement('div');
+  sw.className = 'sw';
+  const btns = {};
+  for (const [key, label] of SW_KEYS) {
+    const b = document.createElement('button');
+    b.className = 'swbtn';
+    b.textContent = label;
+    // Momentary by default (mousedown/up), matching a physical push button. Shift-click latches
+    // so a switch can be held on while another is pressed.
+    b.onmousedown = (e) => { if (!e.shiftKey) { d[key] = true; sync(i); push(i); } };
+    b.onmouseup = (e) => { if (!e.shiftKey) { d[key] = false; sync(i); push(i); } };
+    b.onmouseleave = () => { if (d[key] && !b.dataset.latched) { d[key] = false; sync(i); push(i); } };
+    b.onclick = (e) => {
+      if (e.shiftKey) {
+        d[key] = !d[key];
+        b.dataset.latched = d[key] ? '1' : '';
+        sync(i); push(i);
+      }
+    };
+    btns[key] = b;
+    sw.append(b);
+  }
+  card.append(sw);
+
+  const vrs = {};
+  for (const [key, label] of [['vrSrc1', 'VR_SRC1'], ['vrSrc2', 'VR_SRC2']]) {
+    const lab = document.createElement('label');
+    lab.className = 'vr';
+    const cap = document.createElement('span');
+    const val = document.createElement('b');
+    val.textContent = '0';
+    cap.append(document.createTextNode(label), val);
+    const range = document.createElement('input');
+    range.type = 'range'; range.min = 0; range.max = 255; range.value = 0;
+    range.oninput = () => { d[key] = Number(range.value); val.textContent = range.value; push(i); };
+    lab.append(cap, range);
+    vrs[key] = { range, val };
+    card.append(lab);
+  }
+
+  const bl = document.createElement('div');
+  bl.className = 'bl';
+  const swatches = document.createElement('div');
+  swatches.className = 'sw4';
+  const lamps = [];
+  for (let k = 0; k < 4; k++) { const s = document.createElement('i'); lamps.push(s); swatches.append(s); }
+  const blNote = document.createElement('small');
+  blNote.textContent = '未配布';
+  // Sends the production output report 0x02, standing in for Switcher.App, so the distribution
+  // path can be exercised without running the full app.
+  const blTest = document.createElement('button');
+  blTest.className = 'swbtn';
+  blTest.textContent = 'テスト送信';
+  blTest.style.padding = '2px 8px';
+  blTest.onclick = async () => {
+    const colors = [
+      { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 },
+      { r: 0, g: 0, b: 255 }, { r: 255, g: 255, b: 0 },
+    ];
+    await fetch(`/api/modules/${i}/backlight`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ colors }),
+    });
+  };
+  bl.append(swatches, blNote, blTest);
+  card.append(bl);
+
+  const read = document.createElement('div');
+  read.className = 'read';
+  read.textContent = 'readback: –';
+  card.append(read);
+
+  el[i] = { card, cb, btns, vrs, lamps, blNote, read };
+  return card;
+}
+
+function sync(i) {
+  const d = desired[i], e = el[i];
+  for (const [key] of SW_KEYS) e.btns[key].classList.toggle('on', d[key]);
+}
+
+let pushTimer = {};
+function push(i) {
+  // Coalesce slider drags into at most one request per frame per module.
+  clearTimeout(pushTimer[i]);
+  pushTimer[i] = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/modules/${i}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(desired[i]),
+      });
+      if (!r.ok) document.getElementById('err').textContent = `送信失敗 (module ${i}): ${r.status}`;
+      else document.getElementById('err').textContent = '';
+    } catch (ex) {
+      document.getElementById('err').textContent = `送信失敗: ${ex}`;
+    }
+  }, 16);
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch('/api/state')).json();
+    document.getElementById('dot').className = 'dot ' + (s.connected ? 'on' : 'off');
+    document.getElementById('conn').textContent = s.connected ? 'Pico 接続中' : 'Pico 未接続';
+    document.getElementById('seq').textContent = s.seq;
+    document.getElementById('count').textContent = s.reportCount;
+    document.getElementById('gaps').textContent = s.seqGaps;
+    document.getElementById('present').textContent =
+      '0x' + s.modulePresent.toString(16).padStart(2, '0');
+    if (!s.connected && s.error) document.getElementById('err').textContent = s.error;
+    // Non-fatal: feature report 0x05 is absent unless the firmware was built with
+    // -DENABLE_FAKE_MODULES=ON, so this is the expected state against a production build.
+    document.getElementById('blwarn').textContent = s.backlightError
+      ? 'バックライト読出不可 — ENABLE_FAKE_MODULES=ON でビルドしたファームですか?'
+      : '';
+
+    for (const m of s.modules) {
+      const e = el[m.index], d = desired[m.index];
+      e.card.classList.toggle('absent', !m.present);
+
+      if (m.backlight) {
+        m.backlight.forEach((c, k) => {
+          e.lamps[k].style.background = `rgb(${c.r},${c.g},${c.b})`;
+        });
+        e.blNote.textContent = 'バックライト配布済み';
+      }
+
+      // Readback from the device, so a mismatch between what we pushed and what the firmware
+      // aggregated is visible rather than silent.
+      const swHex = ((m.pgm1Src1 ? 1 : 0) | (m.pgm1Src2 ? 2 : 0) |
+                     (m.pgm2Src1 ? 4 : 0) | (m.pgm2Src2 ? 8 : 0));
+      e.read.textContent =
+        `readback: present=${m.present ? 1 : 0} sw=0x${swHex.toString(16)} ` +
+        `vr=${m.vrSrc1},${m.vrSrc2}`;
+      const want = ((d.pgm1Src1 ? 1 : 0) | (d.pgm1Src2 ? 2 : 0) |
+                    (d.pgm2Src1 ? 4 : 0) | (d.pgm2Src2 ? 8 : 0));
+      // VR is compared loosely: the firmware only resends when the deadband (VR_DEADBAND_DELTA=3)
+      // is exceeded, so the last few counts of a drag legitimately lag behind.
+      const mismatch = m.present !== d.present || (d.present && (swHex !== want ||
+        Math.abs(m.vrSrc1 - d.vrSrc1) > 3 || Math.abs(m.vrSrc2 - d.vrSrc2) > 3));
+      e.read.classList.toggle('mismatch', mismatch);
+    }
+  } catch (ex) {
+    document.getElementById('dot').className = 'dot off';
+    document.getElementById('conn').textContent = 'シミュレータに接続できません';
+  }
+}
+
+document.getElementById('reboot').onclick = async () => {
+  if (!confirm('Pico を BOOTSEL モードで再起動します。ファームの書き込み待ち状態になります。')) return;
+  await fetch('/api/reboot-bootsel', { method: 'POST' });
+};
+
+const grid = document.getElementById('grid');
+for (let i = 0; i < MAX_MODULES; i++) grid.append(buildModule(i));
+poll();
+setInterval(poll, 100);
+</script>
+
+</body>
+</html>
