@@ -10,13 +10,35 @@
 #define MODULE_VR_COUNT 2     // src1, src2
 
 // ---- I2C (モジュール集約用マスター, 親仕様書 §4.5) ----
-#define MODULE_I2C_INSTANCE i2c0
-#define MODULE_I2C_SDA_PIN 4
-#define MODULE_I2C_SCL_PIN 5
-#define MODULE_I2C_BAUD 400000 // 100k~400kHz
+//
+// 実基板 softswitcher_module_master は、モジュール1台につき専用のI2Cバスを1本引き出す
+// (= MODULE_BUS_COUNT 本のスロット)。モジュールは数珠つなぎで、マスターに最も近い1台が
+// バス1(1x07コネクタ)を使い、残りのバス2..5は2x08コネクタでそのまま次段へ渡される。
+// 各モジュールは受け取った束の先頭ペアを自分のI2Cとして消費し、残りを1ペアずつずらして
+// 次段へ渡す。つまり「数珠つなぎのn番目のモジュール = バスn」。
+//
+// モジュール側(CH32V003)にはアドレスストラップが無く全台が 0x30 で待ち受けるため、
+// モジュール番号(HIDレポートのスロット位置)は「どのバスで応答したか」で決まる。
+#define MODULE_BUS_COUNT 5
+#define MODULE_I2C_ADDR 0x30
 
-// モジュールI2Cアドレス: ベース 0x30 + モジュール番号(0..MAX_MODULES-1) = 0x30..0x37
-#define MODULE_I2C_ADDR_BASE 0x30
+// バス1..5の {SDA, SCL} GPIO番号 (Pico実装ピン: 26/27pin, 31/32pin, 6/7pin, 4/5pin, 1/2pin)。
+// RP2040/RP2350ではI2Cコントローラ(i2c0/i2c1)がGPIO番号から一意に決まるため、
+// インスタンスは持たず module_bus.c が算出する。5本のバスを i2c0(バス1,3,5) と
+// i2c1(バス2,4) の2コントローラで時分割して使う。
+#define MODULE_BUS_PINS_INIT     \
+    {                            \
+        {20, 21}, /* バス1 */    \
+        {26, 27}, /* バス2 */    \
+        {4, 5},   /* バス3 */    \
+        {2, 3},   /* バス4 */    \
+        {0, 1},   /* バス5 */    \
+    }
+
+// I2Cバスクロック。仕様上は100k〜400kHzだが、マスター基板・モジュール基板とも外付けの
+// プルアップ抵抗を持たずRP2040/RP2350の内蔵プルアップ(数十kΩ)に頼る配線のため、
+// 立ち上がりに余裕のある100kHzを既定とする(外付けプルアップを実装したら引き上げ可)。
+#define MODULE_I2C_BAUD 100000
 
 // モジュール内レジスタマップ(親仕様書 §4.5)
 #define MODULE_REG_STATE 0x00
@@ -46,6 +68,36 @@
 
 // 状態変化が無くても定期送出する周期(取りこぼし対策, 親仕様書 §2.2/§4.1)。
 #define HID_STATE_SEND_INTERVAL_MS 20
+
+// ---- デバッグ用 fake モジュール (FAKE_MODULES ビルドのみ) ----
+// 実機のスイッチングモジュール(CH32V003)が手元に無い状態でSW/VR集約・HID経路を検証する
+// ための開発専用チャネル。-DENABLE_FAKE_MODULES=ON のビルドでのみ定義され、本番ビルドの
+// HID記述子・レポート契約(§4.1)には一切現れない。
+#ifdef FAKE_MODULES
+#define HID_REPORT_ID_FAKE_MODULE_OUT 0x04        // PC→Pico: 偽モジュールのpresent/SW/VRを注入
+#define HID_REPORT_ID_FAKE_BACKLIGHT_FEATURE 0x05 // PC←Pico: 配布されたバックライトの読出
+
+// 出力レポート0x04のバイト長 = module_index(1) + present(1) + switches(1) + VR×MODULE_VR_COUNT
+#define HID_REPORT_FAKE_MODULE_OUT_LEN (3 + MODULE_VR_COUNT)
+
+// featureレポート0x05のバイト長 = module_index(1) + 4灯分RGB(12)
+// 入力レポートではなくfeatureにしているのは、入力レポートを0x01の1種類に保つため。
+// PC側のHID実装(src/Switcher.Hid/Devices/HidSharpDevice.cs)は入力レポートの先頭
+// Report IDを無条件に剥がすので、入力レポートを増やすとFAKE_MODULESビルドを本番アプリへ
+// 繋いだときに状態レポートとして誤解釈されてしまう。
+#define HID_REPORT_FAKE_BACKLIGHT_FEATURE_LEN (1 + MODULE_REG_BACKLIGHT_LEN)
+
+// 未だ一度もバックライトが配布されていないことを示すmodule_indexのセンチネル。
+#define FAKE_BACKLIGHT_MODULE_NONE 0xFF
+
+// PC→Pico: BOOTSEL(USBマスストレージ書込モード)へ再起動する。このファームはCDCを持たず
+// picotool経由のリセットができないため、デバッグビルドの焼き直しごとに物理ボタンの押下が
+// 必要になる。それを避けるための開発専用コマンド。
+#define HID_REPORT_ID_FAKE_REBOOT_OUT 0x06
+#define HID_REPORT_FAKE_REBOOT_OUT_LEN 1
+// 誤爆防止のマジックバイト。この値でなければ無視する。
+#define FAKE_REBOOT_MAGIC 0xB7
+#endif
 
 // ---- VRデッドバンド ----
 // 前回送出値との差の絶対値がこの値未満のVR変化は送出対象外とする(0..255スケール)。
