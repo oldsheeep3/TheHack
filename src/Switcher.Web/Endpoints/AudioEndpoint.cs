@@ -12,6 +12,12 @@ internal static class AudioEndpoint
 {
     public static IResult GetDevices(IVideoEngine engine) => Results.Ok(engine.QueryAudioDevices());
 
+    /// <summary>The routing table currently in force (the <c>PUT</c> replaces the whole table).</summary>
+    public static async Task<IResult> GetOutputsAsync(
+        ISwitcherConfigService configService,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await configService.GetAudioOutputsAsync(cancellationToken));
+
     public static async Task<IResult> PutOutputsAsync(
         AudioOutputsRequest? request,
         ISwitcherConfigService configService,

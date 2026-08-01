@@ -327,6 +327,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    /// <summary>The definitions behind the sources the engine is running, for settings clients that have
+    /// to render an edit form (docs/specs/phone-web-bridge.md §2.2). Legacy channel-based sources have no
+    /// definition and so do not appear.</summary>
+    public Task<IReadOnlyList<SourceDefinition>> GetSourceDefinitionsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult<IReadOnlyList<SourceDefinition>>([.. _sourceDefinitions.Values]);
+        }
+    }
+
     public Task ApplyProgramAsync(ProgramRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -466,6 +477,14 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         return Task.CompletedTask;
     }
 
+    public Task<MultiviewLayout> GetMultiviewLayoutAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult(CurrentMultiviewLayout);
+        }
+    }
+
     public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -492,6 +511,17 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         WarnAboutDeadBuses();
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>The output table in force. Read from the persisted config rather than the engine so it
+    /// answers before the engine has started (settings clients poll from the moment the web host is up).
+    /// </summary>
+    public Task<OutputsRequest> GetOutputsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_stateLock)
+        {
+            return Task.FromResult(new OutputsRequest(_runtimeConfig.OutputAssignments));
+        }
     }
 
     /// <summary>Program buses whose sinks are all assigned but none running — an NDI sink with no NDI
@@ -533,6 +563,9 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
         ModulesChanged?.Invoke(this, CurrentModuleMappings);
         return Task.CompletedTask;
     }
+
+    public Task<ModulesRequest> GetModulesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ModulesRequest(CurrentModuleMappings));
 
     /// <summary>The ATEM connection settings and button mappings currently in force.</summary>
     public AtemConfig CurrentAtemConfig
@@ -930,6 +963,9 @@ public sealed class AppOrchestrator : ISwitcherConfigService, IControllerInputSi
     {
         get { lock (_stateLock) { return _runtimeConfig.AudioOutputList; } }
     }
+
+    public Task<AudioOutputsRequest> GetAudioOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AudioOutputsRequest(CurrentAudioOutputs));
 
     /// <summary>Audio render endpoints this machine can play to.</summary>
     public IReadOnlyList<AudioDeviceInfo> QueryAudioDevices() => _engine.QueryAudioDevices();

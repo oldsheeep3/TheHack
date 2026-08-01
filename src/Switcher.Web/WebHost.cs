@@ -1,14 +1,15 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.FileProviders;
 using Switcher.Contracts;
 using Switcher.Web.Endpoints;
 
 namespace Switcher.Web;
 
 /// <summary>
-/// Embedded Kestrel host exposing the config/sources REST API and the controller-input WebSocket
-/// (docs/specs/pc-switcher-app.md §2.4). Constructed and owned by the app composition root; the
-/// core services (<see cref="ISwitcherConfigService"/> / <see cref="IVideoEngine"/> /
+/// Embedded Kestrel host exposing the config/sources REST API, the settings web UI, and the
+/// controller-input WebSocket (docs/specs/pc-switcher-app.md §2.4). Constructed and owned by the app
+/// composition root; the core services (<see cref="ISwitcherConfigService"/> / <see cref="IVideoEngine"/> /
 /// <see cref="IControllerInputSink"/> / <see cref="IDeviceQueryService"/>) are injected so this
 /// library never references their concrete implementations.
 /// </summary>
@@ -22,12 +23,19 @@ public sealed class WebHost : IAsyncDisposable
     /// (docs/specs/multiview-output-revision.md §4.1). When omitted, a null-object that reports no
     /// devices is used so the endpoints stay responsive rather than throwing.
     /// </param>
+    /// <param name="webUiPath">
+    /// Directory holding the built settings UI. Defaults to <c>wwwroot</c> beside the executable, which
+    /// is where the App build drops <c>apps/phone-bridge/dist</c>. Serving it here rather than from a
+    /// separate dev server is what keeps the page same-origin with the API it calls — see
+    /// <see cref="WebUiRoot"/>. No UI deployed is not an error; the API just serves no pages.
+    /// </param>
     public WebHost(
         ISwitcherConfigService configService,
         IVideoEngine videoEngine,
         IControllerInputSink inputSink,
         int port = ProtocolConstants.WebPort,
-        IDeviceQueryService? deviceQueryService = null)
+        IDeviceQueryService? deviceQueryService = null,
+        string? webUiPath = null)
     {
         ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(videoEngine);
@@ -47,9 +55,30 @@ public sealed class WebHost : IAsyncDisposable
             deviceQueryService ?? UnavailableDeviceQueryService.Instance);
 
         _app = builder.Build();
+
+        WebUiPath = WebUiRoot.Resolve(webUiPath);
+        if (WebUiPath is not null)
+        {
+            // An explicit provider rather than the host's default web root: the content root is the
+            // process's working directory, which for an app launched from a shortcut or by the debugger
+            // is not the directory the UI was deployed into.
+            var files = new PhysicalFileProvider(WebUiPath);
+            _app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files });
+            _app.UseStaticFiles(new StaticFileOptions { FileProvider = files });
+        }
+
         _app.UseWebSockets();
         WebHostEndpoints.Map(_app);
     }
+
+    /// <summary>The settings UI being served, or <c>null</c> when none is deployed.</summary>
+    public string? WebUiPath { get; }
+
+    /// <summary>
+    /// Addresses the server is listening on, valid after <see cref="StartAsync"/>. Meaningful when the
+    /// port was left to the OS (<c>port: 0</c>), which is how tests avoid fighting over 8080.
+    /// </summary>
+    public IReadOnlyCollection<string> Urls => [.. _app.Urls];
 
     public Task StartAsync(CancellationToken cancellationToken = default) => _app.StartAsync(cancellationToken);
 

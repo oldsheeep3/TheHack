@@ -265,6 +265,13 @@ else
   # ci.yml と同じ npm ci（lock 厳守）。node_modules は毎回作り直される。
   elif (cd "$PHONE_BRIDGE" && npm ci --no-audit --no-fund >/dev/null 2>&1); then
     ok "npm ci 完了 ($PHONE_BRIDGE)"
+    # 設定WebUIは dist を App の出力へ wwwroot としてコピーして配信する（同一オリジンで
+    # /api/v1/* を叩くため）。ここでビルドしておかないと :8080 が何も返さない。
+    if (cd "$PHONE_BRIDGE" && npm run build >/dev/null 2>&1); then
+      ok "設定WebUI をビルド ($PHONE_BRIDGE/dist)"
+    else
+      fail "設定WebUI のビルドに失敗した（cd $PHONE_BRIDGE && npm run build で詳細を確認）"
+    fi
   else
     fail "npm ci に失敗した（cd $PHONE_BRIDGE && npm ci で詳細を確認）"
   fi

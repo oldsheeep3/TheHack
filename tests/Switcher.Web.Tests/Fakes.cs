@@ -21,6 +21,18 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
     /// <summary>What GET /api/v1/atem reports back.</summary>
     public AtemConfig CurrentAtemConfig { get; set; } = new(Enabled: false, Ip: string.Empty, Mappings: []);
 
+    /// <summary>What the read-back endpoints report as the configuration currently in force.</summary>
+    public List<SourceDefinition> CurrentSourceDefinitions { get; } = [];
+
+    public MultiviewLayout CurrentMultiviewLayout { get; set; } =
+        new([.. Enumerable.Repeat("EMPTY", 16)]);
+
+    public List<OutputAssignment> CurrentOutputs { get; } = [.. OutputDefaults.Default];
+
+    public List<AudioOutputAssignment> CurrentAudioOutputs { get; } = [];
+
+    public List<ModuleMapping> CurrentModules { get; } = [];
+
     /// <summary>What a discovery sweep is pretending to have found.</summary>
     public List<AtemDeviceInfo> DiscoverableAtems { get; } = [];
 
@@ -32,6 +44,9 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         Received.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<SourceDefinition>> GetSourceDefinitionsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SourceDefinition>>(CurrentSourceDefinitions);
 
     public Task AddSourceAsync(SourceDefinition source, CancellationToken cancellationToken = default)
     {
@@ -63,11 +78,17 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<MultiviewLayout> GetMultiviewLayoutAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(CurrentMultiviewLayout);
+
     public Task ApplyOutputsAsync(OutputsRequest request, CancellationToken cancellationToken = default)
     {
         AppliedOutputs.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<OutputsRequest> GetOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new OutputsRequest(CurrentOutputs));
 
     public Task ApplyAudioOutputsAsync(AudioOutputsRequest request, CancellationToken cancellationToken = default)
     {
@@ -75,11 +96,17 @@ internal sealed class FakeSwitcherConfigService : ISwitcherConfigService
         return Task.CompletedTask;
     }
 
+    public Task<AudioOutputsRequest> GetAudioOutputsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AudioOutputsRequest(CurrentAudioOutputs));
+
     public Task ApplyModulesAsync(ModulesRequest request, CancellationToken cancellationToken = default)
     {
         AppliedModules.Add(request);
         return Task.CompletedTask;
     }
+
+    public Task<ModulesRequest> GetModulesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ModulesRequest(CurrentModules));
 
     public Task ApplyAtemConfigAsync(AtemConfig config, CancellationToken cancellationToken = default)
     {
