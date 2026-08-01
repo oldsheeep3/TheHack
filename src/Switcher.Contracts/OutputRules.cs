@@ -53,6 +53,44 @@ public static class OutputRules
         return dead;
     }
 
+    /// <summary>
+    /// Complaints about how many sinks the table holds: at most <see cref="OutputCatalog.MaxOf"/> of any
+    /// one kind and at most <see cref="OutputCatalog.MaxTotal"/> in total.
+    ///
+    /// The App disables its "add output" affordance at the same ceilings, so a table that trips this has
+    /// come from the Web API or a hand-edited config rather than from the UI — which is exactly why the
+    /// limit is enforced here and not only in the UI. A table written by a build that predates
+    /// <see cref="OutputCatalog.MaxWebcamSinks"/> can also trip it, by carrying the old
+    /// <c>PGM1→VCAM1 / PGM2→VCAM2</c> default; the App falls back to the current defaults when a restored
+    /// table is over limit, so that upgrade path resets the routing rather than failing to start.
+    /// </summary>
+    public static IReadOnlyList<string> DescribeOverLimit(IReadOnlyList<OutputAssignment>? outputs)
+    {
+        var errors = new List<string>();
+        if (outputs is null)
+        {
+            return errors;
+        }
+
+        if (outputs.Count > OutputCatalog.MaxTotal)
+        {
+            errors.Add($"outputs holds {outputs.Count} sinks; at most {OutputCatalog.MaxTotal} are allowed.");
+        }
+
+        foreach (var kind in Enum.GetValues<OutputKind>())
+        {
+            var count = outputs.Count(o => OutputCatalog.KindOf(o.Sink) == kind);
+            if (count > OutputCatalog.MaxOf(kind))
+            {
+                errors.Add(
+                    $"outputs holds {count} {OutputCatalog.TokenOf(kind)} sinks; at most " +
+                    $"{OutputCatalog.MaxOf(kind)} are allowed.");
+            }
+        }
+
+        return errors;
+    }
+
     /// <summary>Human-readable complaint for <paramref name="missing"/>, or <c>null</c> when the table
     /// is complete.</summary>
     public static string? DescribeMissingBuses(IReadOnlyList<OutputSource> missing)

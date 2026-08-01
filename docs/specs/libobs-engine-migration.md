@@ -56,10 +56,10 @@
 
 ## 2.3 出力（親 §2.4 を libobs で実現）
 
-- [ ] **仮想カメラ×2**（既定 PGM1→VCAM1 / PGM2→VCAM2）: libobs の仮想カメラ出力を用いる。**OBS 標準の仮想カメラ出力は1系統**のため、2系統化の実現手段（第2デバイスの提供可否・代替として一方を NDI/HDMI に割当）は実装タスクで確定する（**技術検証項目**）。
-- [ ] **HDMI/物理ディスプレイ全画面出力**: 当該バスの `obs_view` テクスチャを `obs_display` 経由でフルスクリーンウィンドウに提示（カーソル非表示・`Esc` 解除）。従来 `Switcher.VirtualCam` の D3D スワップチェーン/HDMI全画面の**役割は本エンジン+App側の obs_display 提示に置換**する。
-- [ ] **NDI 出力（2系統, PGM1/PGM2）**: NDI は OBS 標準搭載ではないため **DistroAV(obs-ndi) プラグイン**のモジュール読込を前提とし、未導入時はダウンロード導線を表示（親 `multiview-output-revision.md` §2.5 の方針を継承）。1 sink 障害が他 sink を止めない。
-- [ ] 出力割当 API（`PUT /api/v1/outputs`）の契約・sink 種別（VCAM1/VCAM2/HDMI/NDI1/NDI2）は**既存のまま維持**し、内部で `engine_start_output` にマッピングする。
+- [ ] **仮想カメラ出力**（既定 PGM1→VCAM1）: libobs の仮想カメラ出力を用いる。**OBS 標準の仮想カメラ出力は1系統**のため、**Webcam sink は `VCAM1` の1本まで**とする。`VCAM2`/`VCAM3` は旧ビルドが書いた設定を読み込むための互換トークンとしてのみ残り、NDI 送出（`SWITCHER VCAM2` / `SWITCHER VCAM3`）で処理される。
+- [ ] **HDMI/物理ディスプレイ全画面出力**: 当該バスの `obs_view` テクスチャを `obs_display` 経由でフルスクリーンウィンドウに提示（カーソル非表示・`Esc` 解除）。従来 `Switcher.VirtualCam` の D3D スワップチェーン/HDMI全画面の**役割は本エンジン+App側の obs_display 提示に置換**する。提示先は `PGM1`/`PGM2` ではなく **sink トークン（`HDMI1`〜`HDMI3`）**で指定し、同一バスに割り当てた2つの HDMI sink がそれぞれ独立した全画面ウィンドウを持てるようにする。
+- [ ] **NDI 出力（`NDI1`〜`NDI3`, ソースは PGM1/PGM2）**: NDI は OBS 標準搭載ではないため **DistroAV(obs-ndi) プラグイン**のモジュール読込を前提とし、未導入時はダウンロード導線を表示（親 `multiview-output-revision.md` §2.5 の方針を継承）。1 sink 障害が他 sink を止めない。
+- [ ] 出力割当 API（`PUT /api/v1/outputs`）の sink は**固定5系統ではなく種別＋序数の可変テーブル**（`VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`、既定 `VCAM1`＋`HDMI1`、上限は Webcam 1・HDMI 3・NDI 3・合計6。親仕様書 §4.2）とし、内部で `engine_start_output` にマッピングする。序数なしの旧トークン（`"VCAM"`/`"HDMI"`/`"NDI"`）は各種別の1番目として読む。エンジン側のトークン解析は `VCAM2`/`VCAM3` も受理する（旧ビルドの設定を読み込むための互換であって、追加できる上限ではない）。
 
 ## 2.4 ソースは「OBS 標準搭載モジュール」のみ
 
@@ -136,12 +136,13 @@
 - `claude`: 最大並列 2（親 `pc-switcher-app.md` §6 に準拠）。
 
 ## 9. 未確定・技術検証項目（実装計画で確定）
-- **仮想カメラ2系統化**: OBS 標準仮想カメラは1系統。2系統をどう提供するか（第2仮想カメラデバイス／一方を NDI・HDMI へ振替）。
+- ~~**仮想カメラ2系統化**~~: **確定（2026-07-31）** — OBS 標準仮想カメラは1系統のため、**Webcam sink は `VCAM1` の1本まで**とする（2本目を NDI 送出へ振り替えると sink の種別が実際の出口を偽るため、そもそも追加させない）。`VCAM2`/`VCAM3` は旧ビルドの設定を読み込むための互換トークンとしてのみ NDI 送出（`SWITCHER VCAM2` / `SWITCHER VCAM3`）で処理される（§2.3）。
 - **OBS バンドルモジュールの同梱範囲**: どのモジュールをアプリに同梱・読込するか（`win-dshow`/`obs-ffmpeg`/`image-source`/`text`/DistroAV）。
 - **リンク対象 OBS バージョンの固定**と ABI 差異の扱い。
 - **P/Invoke 境界の粒度**（同期呼び出し vs コールバック/イベント、スレッド安全性）。
 - **マルチビュー描画の実装方式**（libobs 内合成 vs App 側 `obs_display` 合成）。
 
 ## 10. 仕様変更履歴
+- **2026-07-31**: 出力（§2.3）を固定5系統から**可変テーブル**へ追随（`00-system-overview.md` §4.2）— sink は種別＋序数（`VCAM1` / `HDMI1`〜`HDMI3` / `NDI1`〜`NDI3`）で既定 `VCAM1`＋`HDMI1`、上限は Webcam 1・HDMI 3・NDI 3・合計6。序数なしの旧トークンは各種別の1番目として読む。全画面提示の対象トークンを `PGM1`/`PGM2` から sink トークン（`HDMI1`〜）へ変更。§9 の「仮想カメラ2系統化」は **Webcam sink 1本まで**で確定し、`VCAM2`/`VCAM3` の NDI 送出は旧ビルド互換の経路としてのみ残す（エンジンのトークン解析はこの互換のため3序数を受理する）。
 - **2026-07-21**: 初版作成。映像エンジンを GStreamer/DirectX 自作合成から **libobs** へ全面移行するリファクタを定義 —
   ①`main` 基点で `develop` 新設、②.NET/WPF 維持＋ネイティブ libobs エンジンDLL（P/Invoke, `IVideoEngine` 抽象）、③`Switcher.Media`/`Switcher.VirtualCam` と両テストの積極削除、④OBS 標準搭載ソースのみ（NDI は DistroAV 前提）、⑤デュアルM/E は `obs_view`×2＋ソース共有で実現、⑥出力/マルチビュー/タリー/HID/ATEM/WebAPI 等の既存要件・契約は維持、⑦インストール済み OBS の libobs にリンク、⑧GPLv2 はネイティブ層に閉じ込め、ヘッドレスCIはフェイク注入で維持。Pico 2 は仕様変更の可能性ありも共通プロトコル規約は不変。

@@ -179,12 +179,23 @@
         <div class="step">
           <div>
             <h3>出力を割り当てる</h3>
-            <p>Outputs ドックで、各出力に PGM1 / PGM2 のどちらを流すか選び「Apply output routing」。</p>
+            <p>Outputs ドックで、各出力に PGM1 / PGM2 のどちらを流すか選び「Apply output routing」。
+            初期状態は<strong>ウェブカメラ 1 つ＋HDMI 1 つ</strong>（Vcam1 / Hdmi1）で、
+            下のドロップダウンで種類（Webcam / HDMI / NDI）を選んで「+ Add」すると出力が増えます
+            （<strong>ウェブカメラは 1 つまで、HDMI と NDI はそれぞれ最大 3 つ、合計最大 6 つ</strong>。
+            ウェブカメラは初期状態の 1 つで上限なので、実際に足せるのは HDMI と NDI です。
+            上限に達すると「+ Add」が押せなくなり、どちらの上限に当たったかがボタンのツールチップに出ます）。</p>
             <ul>
-              <li><strong>Vcam1</strong> — 仮想カメラ。Zoom / Teams / Meet などがカメラとして認識します</li>
-              <li><strong>Vcam2 / Ndi1 / Ndi2</strong> — NDI 送出（映像と音声）</li>
-              <li><strong>Hdmi</strong> — 指定ディスプレイに全画面</li>
+              <li><strong>Webcam（Vcam1）</strong> — 仮想カメラ。Zoom / Teams / Meet などがカメラとして認識します</li>
+              <li><strong>Hdmi（Hdmi1〜Hdmi3）</strong> — 指定ディスプレイに全画面</li>
+              <li><strong>Ndi（Ndi1〜Ndi3）</strong> — NDI 送出（映像と音声）</li>
             </ul>
+            <div class="note">
+              <p><strong>ウェブカメラ出力は 1 つだけ</strong>です。OBS が用意できる仮想カメラは 1 本しかないため、
+              2 つ目を認めると中身は NDI 送出になってしまい、「ウェブカメラ」という名前が実際の出口を偽ります。
+              そうならないよう、そもそも 2 つ目を追加できないようにしてあります。もう 1 系統必要なときは
+              <strong>NDI 出力</strong>を足してください。</p>
+            </div>
             <div class="note">
               <p><strong>PGM1・PGM2 のそれぞれに最低 1 つ</strong>割り当ててください。全部を同じバスに
               向けた設定は保存できません。</p>
@@ -226,10 +237,12 @@
                 <td>ソースの AUDIO が <code>OFF</code> になっていないか。<code>AFV</code> はオンエア中だけ鳴ります。
                 Outputs ドックで PGM1 / PGM2 に出力デバイスが割り当てられ、「Apply audio」を押したかも確認してください</td></tr>
             <tr><th scope="row">出力が起動しない</th>
-                <td>NDI 系の出力（Vcam2 / Ndi1 / Ndi2）は <strong>NDI Tools（NDI ランタイム）</strong>が入っていないと起動しません。
-                仮想カメラは他のアプリが使用中だと起動しません。どちらの場合も「Apply output routing」時に警告が出ます</td></tr>
+                <td>NDI 系の出力（Ndi1〜Ndi3）は<strong>NDI Tools（NDI ランタイム）</strong>が入っていないと起動しません。
+                Vcam1（仮想カメラ）は他のアプリが使用中だと起動しません。どちらの場合も「Apply output routing」時に警告が出ます</td></tr>
             <tr><th scope="row">出力ルーティングが適用できない</th>
-                <td>PGM1・PGM2 の<strong>それぞれに最低 1 つの出力</strong>が必要です。全部を同じバスに向けると弾かれます</td></tr>
+                <td>PGM1・PGM2 の<strong>それぞれに最低 1 つの出力</strong>が必要です。全部を同じバスに向けると弾かれます。
+                出力の数が<strong>ウェブカメラ 1 つ・HDMI 3 つ・NDI 3 つ・合計 6 つ</strong>を超えている場合も弾かれます
+                （古いバージョンで作った「ウェブカメラ 2 つ」の設定もここで弾かれ、初期設定に戻ります）</td></tr>
             <tr><th scope="row">映像がカクつく</th>
                 <td>「Capture mode」がデバイス既定になっていないか。明示的に 30 fps 以上のモードを選びます</td></tr>
             <tr><th scope="row">NDI が一覧に出ない</th>

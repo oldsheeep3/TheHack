@@ -115,7 +115,8 @@ public interface IVideoEngine
 
     // --- outputs (was IVirtualCameraOutput + OutputRouter) -----------------
 
-    /// <summary>Applies the VCAM1/VCAM2/HDMI/NDI1/NDI2 sink assignments atomically.</summary>
+    /// <summary>Applies the sink assignments atomically, replacing the whole table. Which sinks are in it
+    /// is up to the operator — see <see cref="OutputCatalog"/> for the kinds and their ceilings.</summary>
     void ApplyOutputs(OutputsRequest request);
 
     IReadOnlyList<OutputAssignment> CurrentAssignments { get; }
@@ -125,8 +126,15 @@ public interface IVideoEngine
     /// <see cref="CurrentAssignments"/>.</summary>
     IReadOnlyList<OutputStatus> QueryOutputStatus();
 
-    /// <summary>Starts a fullscreen <c>obs_display</c> for <paramref name="target"/> (e.g. "PGM1"/"MULTIVIEW")
-    /// on the given window handle and display. No-op on backends without native display support.</summary>
+    /// <summary>Starts a fullscreen <c>obs_display</c> for <paramref name="target"/> on the given window
+    /// handle and display. No-op on backends without native display support.
+    /// <para>
+    /// A projector presenting an HDMI sink passes that sink's token (<c>HDMI1</c>…<c>HDMI3</c>, see
+    /// <see cref="OutputCatalog.TokenOf(OutputSink)"/>) rather than the bus it happens to carry: the
+    /// engine keys displays by target, so two HDMI sinks routed to the same bus would otherwise collide
+    /// on one key and only one window would render. Bus tokens (<c>PGM1</c>/<c>PVW2</c>) and
+    /// <c>MULTIVIEW</c> remain valid for projectors that are not an output sink.
+    /// </para></summary>
     void StartDisplayOutput(string target, IntPtr windowHandle, int displayId);
 
     void StopDisplayOutput(string target);

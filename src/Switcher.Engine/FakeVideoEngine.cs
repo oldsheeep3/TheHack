@@ -6,8 +6,9 @@ namespace Switcher.Engine;
 /// <summary>
 /// In-memory, native-free <see cref="IVideoEngine"/> used by headless tests (Web/App/Engine) and any
 /// non-Windows environment. It faithfully models the *observable* state the orchestrator and endpoints
-/// depend on - the source registry (with stable channel resolution) and the current output assignments -
-/// while treating the actual video compositing/output as no-ops. libobs is never touched.
+/// depend on - the source registry (with stable channel resolution), the current output assignments and
+/// which targets have a display attached - while treating the actual video compositing/output as no-ops.
+/// libobs is never touched.
 /// </summary>
 public sealed class FakeVideoEngine : IVideoEngine
 {
@@ -213,9 +214,10 @@ public sealed class FakeVideoEngine : IVideoEngine
                 throw new ArgumentException($"Duplicate output sink '{assignment.Sink}'.", nameof(request));
             }
 
-            if (assignment.Sink == OutputSink.Hdmi && assignment.DisplayId is null)
+            if (OutputCatalog.KindOf(assignment.Sink) == OutputKind.Hdmi && assignment.DisplayId is null)
             {
-                throw new ArgumentException("HDMI sink requires a display id.", nameof(request));
+                throw new ArgumentException(
+                    $"{OutputCatalog.TokenOf(assignment.Sink)} sink requires a display id.", nameof(request));
             }
         }
 
@@ -234,22 +236,64 @@ public sealed class FakeVideoEngine : IVideoEngine
     /// running, which is what a machine with the devices present would do.</summary>
     public HashSet<OutputSink> FailingSinks { get; } = [];
 
+    /// <summary>
+    /// Which sinks are egressing, by the same rule the native engine applies (engine_get_output_status).
+    /// <para>
+    /// An HDMI sink binds no output of its own - the App presents it by opening a projector window - so
+    /// it reads as running exactly while a display started with its token is attached, and
+    /// <see cref="FailingSinks"/> has no say. Every other kind is a real output that either started or
+    /// did not, which is what <see cref="FailingSinks"/> stands in for.
+    /// </para>
+    /// </summary>
     public IReadOnlyList<OutputStatus> QueryOutputStatus()
     {
         lock (_gate)
         {
-            return [.. _assignments.Select(a => new OutputStatus(a.Sink, a.Source, !FailingSinks.Contains(a.Sink)))];
+            return [.. _assignments.Select(a => new OutputStatus(a.Sink, a.Source, IsRunningLocked(a.Sink)))];
+        }
+    }
+
+    private bool IsRunningLocked(OutputSink sink) =>
+        OutputCatalog.KindOf(sink) == OutputKind.Hdmi
+            ? _displays.ContainsKey(OutputCatalog.TokenOf(sink))
+            : !FailingSinks.Contains(sink);
+
+    // Display targets currently attached, keyed by target token ("PGM1", "MULTIVIEW", "HDMI2", ...). A
+    // dictionary rather than a single "last target" because HDMI sinks are addressed per sink now: two
+    // projectors can be open at once, even on the same program bus, and closing one must leave the other
+    // attached - which is exactly what the native ctx->displays map does.
+    private readonly Dictionary<string, (IntPtr WindowHandle, int DisplayId)> _displays =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Test helper: the targets that currently have a display attached.</summary>
+    public IReadOnlyList<string> DisplayTargets
+    {
+        get { lock (_gate) { return [.. _displays.Keys]; } }
+    }
+
+    /// <summary>Test helper: the window/display a target was started on, or <c>null</c> if it is not attached.</summary>
+    public (IntPtr WindowHandle, int DisplayId)? DisplayFor(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        lock (_gate)
+        {
+            return _displays.TryGetValue(target, out var d) ? d : null;
         }
     }
 
     public void StartDisplayOutput(string target, IntPtr windowHandle, int displayId)
     {
-        // No native display in the fake.
+        ArgumentNullException.ThrowIfNull(target);
+
+        // No native display in the fake; only the bookkeeping the callers can observe. Re-starting the
+        // same target replaces its record, as engine_start_display replaces the obs_display.
+        lock (_gate) { _displays[target] = (windowHandle, displayId); }
     }
 
     public void StopDisplayOutput(string target)
     {
-        // No native display in the fake.
+        ArgumentNullException.ThrowIfNull(target);
+        lock (_gate) { _displays.Remove(target); }
     }
 
     private int AllocateChannelLocked(string id)

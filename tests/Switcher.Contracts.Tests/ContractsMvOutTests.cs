@@ -37,14 +37,15 @@ public class ContractsMvOutTests
     [Fact]
     public void OutputAssignment_LegacyJson_WithoutNdiName_Deserializes()
     {
-        // Payload shaped exactly like the pre-revision contract (no ndi_name member).
+        // Payload shaped exactly like the pre-revision contract: no ndi_name member, and the
+        // ordinal-less "HDMI" sink token from before the output table became operator-editable.
         const string legacyJson =
             "{\"sink\":\"HDMI\",\"source\":\"PGM1\",\"display_id\":1,\"hide_cursor\":true,\"fullscreen\":true}";
 
         var assignment = JsonSerializer.Deserialize<OutputAssignment>(legacyJson, Options);
 
         Assert.NotNull(assignment);
-        Assert.Equal(OutputSink.Hdmi, assignment.Sink);
+        Assert.Equal(OutputSink.Hdmi1, assignment.Sink);
         Assert.Equal(1, assignment.DisplayId);
         Assert.Null(assignment.NdiName);
     }

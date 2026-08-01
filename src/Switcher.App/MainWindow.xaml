@@ -33,7 +33,9 @@
             </MenuItem>
             <MenuItem Header="_Outputs">
                 <MenuItem Header="Apply output routing" Click="OnApplyOutputsClick" />
-                <MenuItem Header="Open projector window" Click="OnOpenProjectorClick" />
+                <!-- One window per routed HDMI sink (up to three). A single sink is opened on its own
+                     from that row's Project button in the Outputs dock. -->
+                <MenuItem Header="Open projector windows" Click="OnOpenProjectorClick" />
             </MenuItem>
             <MenuItem Header="_Window">
                 <MenuItem Header="Move console to this display" Click="OnMoveOperatorClick" />
@@ -63,7 +65,8 @@
                             ToolTip="Pick an ATEM, assign its PGM/PVW to the controller, bring its ON AIR output back in" />
                     <Button Content="Multiview settings" Click="OnOpenMultiviewSettingsClick" />
                     <Button Content="Multiview full-screen" Click="OnMultiviewFullscreenClick" />
-                    <Button Content="Open projector" Click="OnOpenProjectorClick" />
+                    <Button Content="Open projectors" Click="OnOpenProjectorClick"
+                            ToolTip="Open a full-screen window for every routed HDMI output" />
                 </StackPanel>
 
                 <!-- Live state, right-aligned: tally first, then the things that can be wrong. Each chip
@@ -471,7 +474,10 @@
                     <Border DockPanel.Dock="Top" Style="{StaticResource DockHeader}">
                         <DockPanel>
                             <TextBlock Text="Outputs" Style="{StaticResource DockTitle}" />
-                            <TextBlock HorizontalAlignment="Right" Style="{StaticResource MicroLabel}" Text="WHERE VIDEO GOES" />
+                            <!-- How full the table is (e.g. "4/6 SINKS"): the ceilings are the reason the
+                                 + button greys out, so they have to be visible before it does. -->
+                            <TextBlock x:Name="OutputCountText" HorizontalAlignment="Right"
+                                       Style="{StaticResource MicroLabel}" Text="2/6 SINKS" />
                         </DockPanel>
                     </Border>
                     <!-- Both sections were stacked in fixed space and the taller one was hiding the other.
@@ -481,14 +487,22 @@
                         <StackPanel>
                             <Expander Header="Output routing" IsExpanded="True" Foreground="{StaticResource Text}"
                                       Margin="0,0,0,4">
-                                <StackPanel Margin="4,4,0,0">
+                                <!-- DataContext is the OutputTableViewModel (set in code-behind): the add
+                                     row binds the kind picker, the ceilings and the refusal wording
+                                     straight off it. The rows themselves are any mix of kinds now, so
+                                     each row's own header/label comes from the row view model. -->
+                                <StackPanel x:Name="OutputRoutingPanel" Margin="4,4,0,0">
                                     <ItemsControl x:Name="OutputsControl">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Border Style="{StaticResource ListRow}">
                                                     <StackPanel>
                                                         <DockPanel>
-                                                            <TextBlock Text="{Binding Sink}" FontWeight="SemiBold" FontSize="12" />
+                                                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" FontSize="12"
+                                                                       VerticalAlignment="Center" />
+                                                            <Button DockPanel.Dock="Right" Content="×" Click="OnRemoveOutputClick"
+                                                                    Tag="{Binding}" Padding="7,0" Margin="3,0,0,0" FontSize="11"
+                                                                    ToolTip="この出力を外す" />
                                                             <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding Source, Mode=TwoWay}"
                                                                       Width="86" HorizontalAlignment="Right" />
                                                         </DockPanel>
@@ -498,6 +512,10 @@
                                                             <StackPanel Orientation="Horizontal">
                                                                 <CheckBox Content="Hide cursor" IsChecked="{Binding HideCursor, Mode=TwoWay}" Margin="0,3,10,3" />
                                                                 <CheckBox Content="Full-screen" IsChecked="{Binding Fullscreen, Mode=TwoWay}" />
+                                                                <!-- Each HDMI sink presents in its own projector window. -->
+                                                                <Button Content="Project" Click="OnProjectOutputClick" Tag="{Binding}"
+                                                                        Padding="8,2" FontSize="11" Margin="10,0,0,0"
+                                                                        ToolTip="Open this output's full-screen window" />
                                                             </StackPanel>
                                                         </StackPanel>
                                                         <StackPanel Visibility="{Binding IsNdi, Converter={StaticResource BoolToVisibility}}">
@@ -508,6 +526,15 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+                                    <!-- Add row: pick a kind, press +. The button greys out at 3 of a kind
+                                         or 6 in total and its tooltip says which ceiling was hit. -->
+                                    <DockPanel Margin="0,4,0,0">
+                                        <Button DockPanel.Dock="Right" Content="+ Add" Click="OnAddOutputClick"
+                                                IsEnabled="{Binding CanAdd}" ToolTip="{Binding AddHint}"
+                                                Padding="8,2" FontSize="11" Margin="3,0,0,0" />
+                                        <ComboBox ItemsSource="{Binding KindOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding SelectedKind, Mode=TwoWay}" FontSize="11" />
+                                    </DockPanel>
                                     <Button Content="Apply output routing" Click="OnApplyOutputsClick"
                                             HorizontalAlignment="Stretch" Margin="0,4,0,0" />
                                 </StackPanel>

@@ -30,11 +30,12 @@ public sealed class EndToEndSmokeTests
         harness.Engine.TryResolveChannel("cam-1", out var channel);
         Assert.Contains(channel, harness.TallyBroadcaster.LastV2!.ActivePgm1);
 
-        // Output assignment: route PGM1 to VCAM1 (already the default) and PGM2 to VCAM2.
+        // Output assignment: route PGM1 to VCAM1 (already the default) and PGM2 to NDI1 - the single OBS
+        // virtual camera means the second bus cannot have a webcam sink of its own.
         await harness.Orchestrator.ApplyOutputsAsync(new OutputsRequest(
         [
             new OutputAssignment(OutputSink.Vcam1, OutputSource.Pgm1, null, null, null),
-            new OutputAssignment(OutputSink.Vcam2, OutputSource.Pgm2, null, null, null),
+            new OutputAssignment(OutputSink.Ndi1, OutputSource.Pgm2, null, null, null),
         ]));
 
         // Module mapping binds module 0's Src1 switch to cam-1 on PGM2's preview.

@@ -46,7 +46,6 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<string> _availableTokens = [];
     private readonly ObservableCollection<string> _availableSourceIds = [];
     private readonly ObservableCollection<MultiviewCellViewModel> _cells = [];
-    private readonly ObservableCollection<OutputAssignmentRowViewModel> _outputRows = [];
     private readonly ObservableCollection<AudioOutputRowViewModel> _audioRows = [];
     private readonly ObservableCollection<ModuleMappingRowViewModel> _moduleRows = [];
     private readonly ObservableCollection<DisplayOption> _availableDisplays = [];
@@ -60,7 +59,17 @@ public partial class MainWindow : Window
     private readonly PreviewBitmapCache _previewBitmaps;
     private readonly MultiviewRegionModel _regionModel = new();
 
-    private ProjectorWindow? _projectorWindow;
+    /// <summary>The editable output table (rows + the add/remove rules). Not a plain row collection any
+    /// more: the operator adds and removes sinks, so the ceilings and the "which sink is next" decision
+    /// live in the model rather than in this window.</summary>
+    private readonly OutputTableViewModel _outputs;
+
+    /// <summary>One projector window per HDMI sink, keyed by sink. Up to
+    /// <see cref="OutputCatalog.MaxSinksPerKind"/> displays can be presenting at once, each on its own monitor
+    /// and each attached to the engine under its own <c>HDMI&lt;n&gt;</c> target, so they open and close
+    /// independently.</summary>
+    private readonly Dictionary<OutputSink, ProjectorWindow> _projectorWindows = new();
+
     private MultiviewFullscreenWindow? _multiviewFullscreen;
     private MultiviewSettingsWindow? _multiviewSettings;
     private MixSourceWindow? _mixEditor;
@@ -95,9 +104,15 @@ public partial class MainWindow : Window
         _operatorDisplayIndex = config.OperatorDisplayIndex;
         _previewBitmaps = new PreviewBitmapCache(framePump);
 
+        _outputs = new OutputTableViewModel(_availableDisplays);
+
         SourceTilesControl.ItemsSource = _tiles;
         MultiviewControl.ItemsSource = _cells;
-        OutputsControl.ItemsSource = _outputRows;
+        OutputsControl.ItemsSource = _outputs.Rows;
+
+        // The add-output picker, the Add button's enabled state and its refusal tooltip all read the
+        // table's capacity, so the routing panel binds against the table itself.
+        OutputRoutingPanel.DataContext = _outputs;
         AudioOutputsControl.ItemsSource = _audioRows;
         ModulesControl.ItemsSource = _moduleRows;
         BusesControl.ItemsSource = _buses;
@@ -113,17 +128,12 @@ public partial class MainWindow : Window
         RefreshAvailableTokensAndIds();
         LoadMultiviewLayout(_orchestrator.CurrentMultiviewLayout);
 
-        foreach (var sink in new[] { OutputSink.Vcam1, OutputSink.Vcam2, OutputSink.Hdmi, OutputSink.Ndi1, OutputSink.Ndi2 })
-        {
-            var row = new OutputAssignmentRowViewModel(sink, _availableDisplays);
-            var current = _engine.CurrentAssignments.FirstOrDefault(a => a.Sink == sink);
-            if (current is not null)
-            {
-                row.LoadFrom(current);
-            }
-
-            _outputRows.Add(row);
-        }
+        // One row per assigned sink rather than one per sink that could exist: the table is whatever the
+        // operator built (falling back to the one-webcam-one-display default on a fresh install), and
+        // rows appear and disappear with the + / × buttons in the dock.
+        _outputs.Load(_engine.CurrentAssignments);
+        _outputs.PropertyChanged += OnOutputTableChanged;
+        OutputCountText.Text = _outputs.Summary;
 
         RebuildAudioRows();
         RebuildModuleRows(_orchestrator.CurrentModuleMappings);
@@ -161,6 +171,7 @@ public partial class MainWindow : Window
             _orchestrator.ModulesChanged -= OnModulesChanged;
             _orchestrator.TallyColorsChanged -= OnTallyColorsChanged;
             _framePump.Tick -= OnFramePumpTick;
+            _outputs.PropertyChanged -= OnOutputTableChanged;
         };
     }
 
@@ -1056,15 +1067,58 @@ public partial class MainWindow : Window
 
     // ── outputs / modules / projector ───────────────────────────────────────────
 
+    /// <summary>Mirrors the table's capacity into the dock header ("4/6 SINKS") as rows come and go.
+    /// The Add button's own state is bound; only the header sits outside the routing panel's
+    /// DataContext.</summary>
+    private void OnOutputTableChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) =>
+        OutputCountText.Text = _outputs.Summary;
+
+    /// <summary>Adds a sink of the kind chosen in the picker. The button is disabled at the ceilings, so
+    /// a refusal here means the click raced the state (or the table was loaded over-limit from a
+    /// hand-edited config) — say which ceiling rather than doing nothing.</summary>
+    private void OnAddOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (_outputs.Add() is null)
+        {
+            System.Windows.MessageBox.Show(
+                _outputs.AddRefusalReason ?? "No more outputs can be added.",
+                "Add output", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    /// <summary>Drops a row from the table. Nothing changes on the engine until Apply — the same as
+    /// every other edit in this dock — so a mis-click is undone by re-adding the sink rather than by
+    /// having taken an output off air.</summary>
+    private void OnRemoveOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: OutputAssignmentRowViewModel row })
+        {
+            _outputs.Remove(row);
+        }
+    }
+
     private async void OnApplyOutputsClick(object sender, RoutedEventArgs e)
     {
-        var hdmi = _outputRows.FirstOrDefault(r => r.IsHdmi);
-        if (hdmi is not null && !ConfirmDisplayConflict(hdmi.DisplayId))
+        // Same rules the Web API validator applies, in the same wording: a table over the ceilings or
+        // with a program bus going nowhere is refused here rather than half-applied by the engine.
+        if (_outputs.Validate() is { Count: > 0 } errors)
         {
+            System.Windows.MessageBox.Show(
+                string.Join("\n\n", errors), "Apply outputs", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        var request = new OutputsRequest(_outputRows.Select(r => r.ToOutputAssignment()).ToList());
+        // One warning per display an HDMI sink targets, not per row: several sinks may share a display
+        // id, and the operator only needs telling once that it is the console's own screen.
+        foreach (var displayId in _outputs.Rows.Where(r => r.IsHdmi).Select(r => r.DisplayId).Distinct())
+        {
+            if (!ConfirmDisplayConflict(displayId))
+            {
+                return;
+            }
+        }
+
+        var request = _outputs.ToRequest();
         try
         {
             await _orchestrator.ApplyOutputsAsync(request).ConfigureAwait(true);
@@ -1074,6 +1128,10 @@ public partial class MainWindow : Window
             System.Windows.MessageBox.Show(ex.Message, "Apply outputs", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+
+        // A projector whose sink the operator just removed is now presenting an output that no longer
+        // exists; close it rather than leave a stale full-screen window covering a monitor.
+        CloseProjectorsForUnassignedSinks();
 
         // An accepted assignment is not a working one: NDI needs the NDI runtime installed, and the
         // virtual camera can be held by another application. Say so rather than let a bus go dark.
@@ -1231,14 +1289,85 @@ public partial class MainWindow : Window
         await _orchestrator.ApplyModulesAsync(request).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Opens a projector for every HDMI sink in the applied routing. There can now be up to
+    /// <see cref="OutputCatalog.MaxSinksPerKind"/> of them, each on its own display, and the menu/toolbar verb
+    /// is "show my displays" — an operator who wants only one opens it from that row's own Project
+    /// button. Already-open projectors are simply re-shown, so this doubles as "put them all back on top".
+    /// </summary>
     private void OnOpenProjectorClick(object sender, RoutedEventArgs e)
     {
-        if (_projectorWindow is null)
+        var sinks = _engine.CurrentAssignments
+            .Where(a => OutputCatalog.KindOf(a.Sink) == OutputKind.Hdmi)
+            .Select(a => a.Sink)
+            .OrderBy(OutputCatalog.OrdinalOf)
+            .ToList();
+
+        if (sinks.Count == 0)
         {
-            _projectorWindow = new ProjectorWindow(_engine, _config);
-            _projectorWindow.Closed += (_, _) => _projectorWindow = null;
+            System.Windows.MessageBox.Show(
+                "No HDMI output is routed. Add an HDMI output in the Outputs dock and press "
+                + "\"Apply output routing\" first.",
+                "Open projector", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
 
-        _projectorWindow.ShowOnConfiguredDisplay();
+        foreach (var sink in sinks)
+        {
+            OpenProjector(sink);
+        }
+    }
+
+    /// <summary>Opens the projector for one HDMI row (its "Project" button).</summary>
+    private void OnProjectOutputClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { Tag: OutputAssignmentRowViewModel row })
+        {
+            OpenProjector(row.Sink);
+        }
+    }
+
+    /// <summary>
+    /// Shows (or re-shows) the projector presenting <paramref name="sink"/>. Keyed by sink so each HDMI
+    /// output owns one window: the engine attaches them under separate <c>HDMI&lt;n&gt;</c> targets, and
+    /// re-using a single window would mean the second display simply never appears.
+    ///
+    /// A row that has not been applied yet is not in <see cref="IVideoEngine.CurrentAssignments"/>, so
+    /// the engine has no bus to render into it — say that instead of opening a black full-screen window
+    /// on top of whatever the sub-operator is looking at.
+    /// </summary>
+    private void OpenProjector(OutputSink sink)
+    {
+        if (!_engine.CurrentAssignments.Any(a => a.Sink == sink))
+        {
+            System.Windows.MessageBox.Show(
+                $"{OutputCatalog.LabelOf(OutputCatalog.KindOf(sink))} {OutputCatalog.OrdinalOf(sink)} is not "
+                + "routed yet. Press \"Apply output routing\" first.",
+                "Open projector", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!_projectorWindows.TryGetValue(sink, out var window))
+        {
+            window = new ProjectorWindow(sink, _engine, _config);
+            _projectorWindows[sink] = window;
+            window.Closed += (_, _) => _projectorWindows.Remove(sink);
+        }
+
+        window.ShowOnConfiguredDisplay();
+    }
+
+    private void CloseProjectorsForUnassignedSinks()
+    {
+        var assigned = _engine.CurrentAssignments.Select(a => a.Sink).ToHashSet();
+
+        // Closing removes the entry through the window's Closed handler, so iterate a copy.
+        foreach (var (sink, window) in _projectorWindows.ToList())
+        {
+            if (!assigned.Contains(sink))
+            {
+                window.Close();
+            }
+        }
     }
 }

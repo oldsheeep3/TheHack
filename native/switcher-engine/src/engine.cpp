@@ -11,6 +11,10 @@
 //    the staged preview scene and swaps the two roles, touching only that bus (no cross-bus bleed).
 //  - Outputs (virtualcam / NDI) bind to a bus's program video_t; HDMI/display renders a target source
 //    to an App-provided HWND via obs_display; taps read back a target video_t as throttled BGRA.
+//    The sink table is not a fixed set: the operator adds one webcam and up to three HDMI / NDI sinks
+//    (VCAM1, HDMI1..HDMI3, NDI1..NDI3), so sink tokens are parsed into kind + ordinal rather than
+//    matched one by one - see parse_sink_token and engine_apply_outputs. VCAM2/VCAM3 are still parsed
+//    for tables written by builds that predate the one-webcam limit.
 //
 // BUILD/RUN: libobs links and runs on a Windows + OBS 31.0.x host only (see README.md). This file is not
 // part of HybridSwitcher.sln and is not compiled by the managed CI (which injects FakeVideoEngine).
@@ -23,17 +27,20 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include <obs.h>
+#include <obs-audio-controls.h>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
 #include <util/platform.h>
@@ -41,6 +48,11 @@
 namespace {
 
 constexpr int kBusCount = 2;
+// Highest ordinal a sink token may carry: VCAM1..3 / HDMI1..3 / NDI1..3. This is a parsing bound, not
+// the operator-facing ceiling - the managed side caps webcams at one (OutputCatalog.MaxWebcamSinks) and
+// everything else at three, but VCAM2/VCAM3 must keep parsing so tables written by older builds still
+// load and reach the NDI fallback below.
+constexpr int kMaxSinksPerKind = 3;
 constexpr uint64_t kTapMinIntervalNs = 33'000'000;  // ~30 fps upper bound on readback (spec step 7)
 
 // A single preview readback tap. The target's source is rendered off-screen into a texrender each frame,
@@ -72,6 +84,53 @@ struct DisplayOut {
     obs_source_t *source = nullptr;  // borrowed: transition / preview scene / multiview scene source
     uint32_t base_w = 0;
     uint32_t base_h = 0;
+    engine_ctx *ctx = nullptr;       // for the multiview overlay; null for plain PGM/PVW displays
+    bool overlay = false;            // draw the multiview cell frames + audio meters over the composite
+};
+
+// Per-source audio level, fed by an obs_volmeter on the audio thread and read by the multiview overlay
+// on the graphics thread. Held through a shared_ptr so a published overlay cell can outlive the pooled
+// source it was bound to: engine_remove_source only stops the volmeter, and the frozen level then ages
+// out on its own (kMeterStaleNs) instead of leaving a stuck bar on screen.
+struct Meter {
+    obs_volmeter_t *volmeter = nullptr;  // owned; stopped in stop_meter. Engine threads only.
+    std::atomic<float> magnitude{-INFINITY};  // dBFS, loudest channel
+    std::atomic<float> peak{-INFINITY};
+    std::atomic<uint64_t> updated_ns{0};
+};
+using MeterRef = std::shared_ptr<Meter>;
+
+// obs_volmeter_add_callback target. Runs on the audio thread; only stores into the atomics above.
+void meter_levels_cb(void *param, const float magnitude[MAX_AUDIO_CHANNELS],
+                     const float peak[MAX_AUDIO_CHANNELS], const float input_peak[MAX_AUDIO_CHANNELS]) {
+    auto *m = static_cast<Meter *>(param);
+    (void)input_peak;  // the bar shows the post-fader level, matching what the source sends on
+    float mag = -INFINITY, pk = -INFINITY;
+    for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ++ch) {
+        if (magnitude[ch] > mag) mag = magnitude[ch];
+        if (peak[ch] > pk) pk = peak[ch];
+    }
+    m->magnitude.store(mag, std::memory_order_relaxed);
+    m->peak.store(pk, std::memory_order_relaxed);
+    m->updated_ns.store(os_gettime_ns(), std::memory_order_release);
+}
+
+// One multiview region, in canvas pixels, as the overlay needs it: a frame to draw and (optionally) an
+// audio level to draw beside it.
+struct MvCell {
+    float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+    bool occupied = false;  // false for EMPTY/unresolvable regions - framed dim, no meter
+    MeterRef meter;         // SRC:<id> regions bind their pooled source's meter directly
+    int bus_meter = -1;     // PGM/PVW regions index MvOverlay::bus_meters instead (the bus restaffs)
+};
+
+// Overlay state shared between the engine threads (which publish) and the graphics thread (which draws).
+// Its own small mutex, never held across a libobs call, so the graphics thread can never be blocked by a
+// thread that is itself waiting on the graphics thread (which is what taking ctx->lock here would risk).
+struct MvOverlay {
+    std::mutex lock;
+    std::vector<MvCell> cells;
+    MeterRef bus_meters[kBusCount * 2];  // [bus * 2 + (0 = program, 1 = preview)]
 };
 
 struct Bus {
@@ -93,15 +152,17 @@ struct engine_ctx {
     Bus buses[kBusCount];
 
     std::map<std::string, obs_source_t *> sources;  // shared pool, keyed by contract source id
+    std::map<std::string, MeterRef> meters;         // audio level per pooled source id (audio sources only)
 
     // multiview composite (its own scene + view + video)
     obs_scene_t *mv_scene = nullptr;
     obs_view_t *mv_view = nullptr;
     video_t *mv_video = nullptr;
+    MvOverlay overlay;  // cell frames + meters drawn over the MULTIVIEW display
 
     std::map<std::string, Tap> taps;               // keyed by target token; mutated only under obs graphics
-    std::map<std::string, OutputSink> outputs;     // keyed by sink token (VCAM1/NDI1/...)
-    std::map<std::string, DisplayOut> displays;    // keyed by target token
+    std::map<std::string, OutputSink> outputs;     // keyed by canonical sink token (VCAM1/HDMI2/NDI3/...)
+    std::map<std::string, DisplayOut> displays;    // keyed by target token (PGM1/PVW2/MULTIVIEW/HDMI2/SRC:<id>)
     bool render_cb_added = false;                  // whether taps_render is registered on the main render
 
     std::atomic<engine_frame_cb> frame_cb{nullptr};  // read lock-free by the main-render tap callback
@@ -131,7 +192,13 @@ struct engine_ctx {
 // dozen takes. The operator window frames its own multiview cells instead (MultiviewTally); giving the
 // composited multiview output the same frames needs a design that never mutates the scene graph on the
 // hot path (retained per-region colour sources whose settings/visibility are updated in place).
+// The cell frames / audio meters this file *does* draw take the other road: they are painted by
+// display_draw straight over the composite (draw_mv_overlay), so the scene graph is never touched at
+// all. Tally colouring could ride on the same path - it only needs the on-air flag per cell.
 static int apply_multiview_locked(engine_ctx *ctx, const char *layout_json);
+
+// Rebinds MvOverlay::bus_meters after a bus's program/preview source changes. Must hold ctx->lock.
+static void sync_bus_meters_locked(engine_ctx *ctx);
 
 // Re-applies the cached layout. No-op before the first engine_apply_multiview. Must hold ctx->lock.
 static void refresh_multiview_locked(engine_ctx *ctx) {
@@ -366,6 +433,67 @@ int bus_index_from_token(const char *tok) {
     return -1;
 }
 
+// The kind half of an output sink token. The output table is built by the operator (one webcam, up to
+// three HDMI and three NDI, six in all), so nothing here may assume a fixed set of sinks.
+enum class SinkKind { None, Vcam, Hdmi, Ndi };
+
+// A parsed sink token: a kind plus its 1-based ordinal within that kind.
+struct SinkToken {
+    SinkKind kind = SinkKind::None;
+    int ordinal = 0;
+};
+
+// "VCAM2" -> {Vcam,2}, "HDMI3" -> {Hdmi,3}. An ordinal-less token means the first sink of its kind, which
+// is how the bare "HDMI" an old runtime-config.json (single-display era) still carries reads as HDMI1.
+// Anything else - a kind this build does not know, an ordinal past kMaxSinksPerKind, junk - comes back as
+// {None,0} so the caller can skip that one row instead of failing the whole table. VCAM2/VCAM3 still parse
+// even though the operator can no longer add them: an older build's table has to load, not be rejected.
+SinkToken parse_sink_token(const std::string &token) {
+    const std::string t = to_upper(token);
+    SinkToken out;
+    size_t prefix = 0;
+    if (t.rfind("VCAM", 0) == 0) { out.kind = SinkKind::Vcam; prefix = 4; }
+    else if (t.rfind("HDMI", 0) == 0) { out.kind = SinkKind::Hdmi; prefix = 4; }
+    else if (t.rfind("NDI", 0) == 0) { out.kind = SinkKind::Ndi; prefix = 3; }
+    else return {};
+
+    const std::string tail = t.substr(prefix);
+    if (tail.empty()) {
+        out.ordinal = 1;  // legacy "HDMI"
+    } else if (tail.size() == 1 && tail[0] >= '1' && tail[0] <= static_cast<char>('0' + kMaxSinksPerKind)) {
+        out.ordinal = tail[0] - '0';
+    } else {
+        return {};
+    }
+    return out;
+}
+
+// Canonical wire token for a parsed sink ("HDMI" normalises to "HDMI1"), matching OutputCatalog.TokenOf
+// on the managed side. This is the key ctx->outputs uses, so one sink is one entry however it was spelled.
+std::string sink_token_text(SinkToken sink) {
+    switch (sink.kind) {
+        case SinkKind::Vcam: return "VCAM" + std::to_string(sink.ordinal);
+        case SinkKind::Hdmi: return "HDMI" + std::to_string(sink.ordinal);
+        case SinkKind::Ndi:  return "NDI" + std::to_string(sink.ordinal);
+        default: return std::string();
+    }
+}
+
+// Sender name a sink that egresses over NDI announces itself as when the assignment names none. NDI<n>
+// is named for the bus it was created to carry ("SWITCHER PGM<n>", matching OutputDefaults on the managed
+// side); a VCAM<n> riding the NDI fallback keeps its own name so a receiver can tell the two apart.
+std::string default_ndi_name(SinkToken sink) {
+    return (sink.kind == SinkKind::Vcam ? "SWITCHER VCAM" : "SWITCHER PGM") + std::to_string(sink.ordinal);
+}
+
+// Which bus a sink carries, from the last applied output table. Falls back to bus 0 when the sink is not
+// in the table - the App can open a projector for a sink before (or without) engine_apply_outputs, and a
+// display showing PGM1 beats a display showing nothing.
+int sink_bus_or_default(engine_ctx *ctx, const std::string &canonical_token) {
+    auto it = ctx->outputs.find(canonical_token);
+    return (it != ctx->outputs.end()) ? it->second.bus : 0;
+}
+
 obs_source_t *resolve_target_source(engine_ctx *ctx, const std::string &target) {
     std::string t = to_upper(target);
     if (t == "PGM1") return ctx->buses[0].transition;
@@ -377,7 +505,24 @@ obs_source_t *resolve_target_source(engine_ctx *ctx, const std::string &target) 
         auto sit = ctx->sources.find(target.substr(4));
         if (sit != ctx->sources.end()) return sit->second;
     }
+
+    // HDMI<n> renders the program of whichever bus that sink carries. The App addresses each HDMI
+    // projector by its sink token rather than by "PGM1"/"PGM2" precisely so two HDMI sinks on the *same*
+    // bus still land on two distinct ctx->displays keys - keying by bus would let the second projector
+    // replace the first.
+    const SinkToken sink = parse_sink_token(t);
+    if (sink.kind == SinkKind::Hdmi) {
+        return ctx->buses[sink_bus_or_default(ctx, sink_token_text(sink))].transition;
+    }
     return nullptr;
+}
+
+// ctx->displays key for a target token: sink tokens are canonicalised so a projector opened with the
+// legacy "HDMI" addresses the same record as the output table's "HDMI1" (which is what lets
+// engine_get_output_status find it); every other target is keyed exactly as the caller spelled it.
+std::string display_key(const std::string &target) {
+    const SinkToken sink = parse_sink_token(target);
+    return sink.kind == SinkKind::None ? target : sink_token_text(sink);
 }
 
 // Re-point everything that caches a *scene object* for one bus after engine_take swapped
@@ -473,6 +618,171 @@ void taps_render(void *param, uint32_t, uint32_t) {
             t.last_ns = now;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// per-source audio meters (feed the multiview overlay bars)
+// ---------------------------------------------------------------------------
+
+// Give a pooled source its own volmeter, if it carries audio at all (scenes - i.e. MIX sources - do not
+// push audio through obs_source_output_audio, so they never report a level and get no bar). Idempotent.
+// Must be called while holding ctx->lock.
+void attach_meter_locked(engine_ctx *ctx, const std::string &id, obs_source_t *src) {
+    if (!src || ctx->meters.count(id)) return;
+    if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) == 0) return;
+
+    obs_volmeter_t *vm = obs_volmeter_create(OBS_FADER_LOG);
+    if (!vm) return;
+    auto m = std::make_shared<Meter>();
+    m->volmeter = vm;
+    obs_volmeter_add_callback(vm, meter_levels_cb, m.get());
+    if (!obs_volmeter_attach_source(vm, src)) {
+        obs_volmeter_remove_callback(vm, meter_levels_cb, m.get());
+        obs_volmeter_destroy(vm);
+        return;
+    }
+    ctx->meters[id] = std::move(m);
+}
+
+// Stop feeding a meter. obs_volmeter_remove_callback takes the volmeter's callback mutex, so once it
+// returns meter_levels_cb is neither running nor callable and the Meter can safely outlive us in an
+// already-published overlay cell.
+void stop_meter(const MeterRef &m) {
+    if (!m || !m->volmeter) return;
+    obs_volmeter_remove_callback(m->volmeter, meter_levels_cb, m.get());
+    obs_volmeter_destroy(m->volmeter);  // detaches the source
+    m->volmeter = nullptr;
+}
+
+// Must be called while holding ctx->lock. Returns null for ids with no audio (or no such source).
+MeterRef find_meter_locked(engine_ctx *ctx, const std::string &id) {
+    if (id.empty()) return nullptr;
+    auto it = ctx->meters.find(id);
+    return it == ctx->meters.end() ? nullptr : it->second;
+}
+
+// ---------------------------------------------------------------------------
+// multiview overlay drawing (graphics thread)
+// ---------------------------------------------------------------------------
+
+constexpr float kMeterFloorDb = -60.0f;   // bottom of the bar
+constexpr float kMeterWarnDb = -20.0f;    // green -> yellow
+constexpr float kMeterHotDb = -9.0f;      // yellow -> red
+constexpr uint64_t kMeterStaleNs = 250'000'000;  // no audio for this long reads as silence
+
+// gs_effect_set_color takes 0xAABBGGRR (vec4_from_rgba reads the little-endian bytes as R,G,B,A).
+constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+           (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24);
+}
+
+constexpr uint32_t kFrameColor = rgba(0xC8, 0xC8, 0xC8, 0xFF);       // occupied cell frame
+constexpr uint32_t kFrameEmptyColor = rgba(0x50, 0x50, 0x50, 0xFF);  // empty cell frame
+constexpr uint32_t kMeterTrackColor = rgba(0x0A, 0x0A, 0x0A, 0xB4);
+constexpr uint32_t kMeterOkColor = rgba(0x3C, 0xC8, 0x50, 0xFF);
+constexpr uint32_t kMeterWarnColor = rgba(0xE0, 0xC0, 0x30, 0xFF);
+constexpr uint32_t kMeterHotColor = rgba(0xE0, 0x3C, 0x32, 0xFF);
+constexpr uint32_t kMeterPeakColor = rgba(0xFF, 0xFF, 0xFF, 0xE0);
+
+// Fill an axis-aligned rectangle in canvas coordinates (y grows downward, matching display_draw's ortho).
+void fill_rect(float x, float y, float w, float h, uint32_t color) {
+    if (w < 1.0f || h < 1.0f) return;
+    gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
+    if (!solid) return;
+    gs_eparam_t *param = gs_effect_get_param_by_name(solid, "color");
+    gs_effect_set_color(param, color);
+    gs_matrix_push();
+    gs_matrix_identity();
+    gs_matrix_translate3f(x, y, 0.0f);
+    while (gs_effect_loop(solid, "Solid")) {
+        gs_draw_sprite(nullptr, 0, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+    }
+    gs_matrix_pop();
+}
+
+// Four bars just inside the cell rect, so neighbouring frames sit side by side instead of overlapping.
+void stroke_rect(float x, float y, float w, float h, float t, uint32_t color) {
+    if (w <= 2.0f * t || h <= 2.0f * t) return;
+    fill_rect(x, y, w, t, color);              // top
+    fill_rect(x, y + h - t, w, t, color);      // bottom
+    fill_rect(x, y + t, t, h - 2.0f * t, color);              // left
+    fill_rect(x + w - t, y + t, t, h - 2.0f * t, color);      // right
+}
+
+// dBFS -> 0..1 of the bar's height. -inf / NaN land on 0.
+float db_to_frac(float db) {
+    if (!(db > kMeterFloorDb)) return 0.0f;
+    if (db > 0.0f) db = 0.0f;
+    return (db - kMeterFloorDb) / -kMeterFloorDb;
+}
+
+// A vertical level bar down the right-hand inside edge of a cell: dark track, level painted bottom-up in
+// green/yellow/red bands, plus a thin peak line.
+void draw_meter(const Meter *meter, float x, float y, float w, float h, float thickness) {
+    if (!meter || w < 2.0f || h < 4.0f) return;
+
+    // A source that has never delivered a sample (a video-only webcam, say) gets no bar at all - an
+    // always-empty track next to every camera would be noise, not information.
+    const uint64_t updated = meter->updated_ns.load(std::memory_order_acquire);
+    if (updated == 0) return;
+
+    float mag = meter->magnitude.load(std::memory_order_relaxed);
+    float peak = meter->peak.load(std::memory_order_relaxed);
+    if (os_gettime_ns() - updated > kMeterStaleNs) {
+        mag = -INFINITY;  // device gone / stream stalled: show an empty track rather than a frozen bar
+        peak = -INFINITY;
+    }
+
+    fill_rect(x, y, w, h, kMeterTrackColor);
+
+    const struct { float top_db; uint32_t color; } bands[] = {
+        {kMeterWarnDb, kMeterOkColor}, {kMeterHotDb, kMeterWarnColor}, {0.0f, kMeterHotColor}};
+    float lo = kMeterFloorDb;
+    for (const auto &band : bands) {
+        const float hi = std::min(mag, band.top_db);
+        if (hi > lo) {
+            const float y0 = y + h - db_to_frac(hi) * h;
+            const float y1 = y + h - db_to_frac(lo) * h;
+            fill_rect(x, y0, w, y1 - y0, band.color);
+        }
+        lo = band.top_db;
+        if (mag <= lo) break;
+    }
+
+    const float peak_frac = db_to_frac(peak);
+    if (peak_frac > 0.0f) {
+        const float py = y + h - peak_frac * h;
+        fill_rect(x, std::min(py, y + h - thickness), w, thickness, kMeterPeakColor);
+    }
+}
+
+// Draws the cell frames + meters over the already-composited multiview. Runs on the graphics thread from
+// display_draw, inside the same viewport/ortho the composite was rendered with (canvas coordinates).
+void draw_mv_overlay(engine_ctx *ctx, float thickness) {
+    gs_blend_state_push();
+    gs_reset_blend_state();  // the track/peak colours are alpha-blended; don't inherit the caller's state
+
+    std::lock_guard<std::mutex> guard(ctx->overlay.lock);
+    for (const auto &cell : ctx->overlay.cells) {
+        if (cell.w < 2.0f * thickness || cell.h < 2.0f * thickness) continue;
+        stroke_rect(cell.x, cell.y, cell.w, cell.h, thickness,
+                    cell.occupied ? kFrameColor : kFrameEmptyColor);
+        if (!cell.occupied) continue;
+
+        // SRC cells carry their meter; PGM/PVW cells read whatever source that bus is staffed with now.
+        const Meter *meter = cell.meter.get();
+        if (!meter && cell.bus_meter >= 0) meter = ctx->overlay.bus_meters[cell.bus_meter].get();
+        if (!meter) continue;
+
+        const float pad = thickness * 2.0f;
+        const float bar_w = std::max(6.0f, cell.w * 0.02f);
+        const float bar_x = cell.x + cell.w - thickness - pad - bar_w;
+        const float bar_y = cell.y + thickness + pad;
+        const float bar_h = cell.h - 2.0f * (thickness + pad);
+        draw_meter(meter, bar_x, bar_y, bar_w, bar_h, thickness);
+    }
+
+    gs_blend_state_pop();
 }
 }  // namespace
 
@@ -699,11 +1009,21 @@ void engine_shutdown(engine_ctx *ctx) {
         }
         ctx->outputs.clear();
 
-        // Destroy displays.
+        // Destroy displays. Their draw callbacks are the only reader of the overlay, so the meters and
+        // the published cells can be torn down right after (obs_display_destroy parks the graphics
+        // thread until any in-flight display_draw has returned).
         for (auto &[target, disp] : ctx->displays) {
             if (disp.display) obs_display_destroy(disp.display);
         }
         ctx->displays.clear();
+
+        for (auto &[id, meter] : ctx->meters) stop_meter(meter);
+        ctx->meters.clear();
+        {
+            std::lock_guard<std::mutex> overlay_guard(ctx->overlay.lock);
+            ctx->overlay.cells.clear();
+            for (auto &m : ctx->overlay.bus_meters) m.reset();
+        }
 
         // Buses.
         for (auto &bus : ctx->buses) {
@@ -878,6 +1198,11 @@ int engine_add_source(engine_ctx *ctx, const char *id, const char *type, const c
     obs_source_set_audio_mixers(src, 0);
 
     ctx->sources[id] = src;  // pool holds the single reference; scene items add their own
+
+    // Meter the source regardless of its mixer mask: the multiview bar shows what the source is sending,
+    // which is exactly what the operator needs to see *before* routing it to a bus.
+    attach_meter_locked(ctx, id, src);
+    sync_bus_meters_locked(ctx);
     return 0;
 }
 
@@ -890,11 +1215,17 @@ int engine_remove_source(engine_ctx *ctx, const char *id) {
     engine_set_tap(ctx, tap_key.c_str(), 0);
 
     std::lock_guard<std::recursive_mutex> guard(ctx->lock);
+    auto mit = ctx->meters.find(id);
+    if (mit != ctx->meters.end()) {
+        stop_meter(mit->second);  // before the release below, so the volmeter never outlives its source
+        ctx->meters.erase(mit);
+    }
     auto it = ctx->sources.find(id);
     if (it != ctx->sources.end()) {
         obs_source_release(it->second);  // scene items that still reference it keep it alive until removed
         ctx->sources.erase(it);
     }
+    sync_bus_meters_locked(ctx);
     return 0;
 }
 
@@ -1008,12 +1339,26 @@ static void emit_state(engine_ctx *ctx) {
     obs_data_release(root);
 }
 
+// A PGM/PVW multiview cell shows a bus, and which source that bus carries changes without the layout
+// ever changing - so the cell's meter binding is kept here rather than in the published cell list.
+// program_id/preview_id are the bus' primary source; a multi-layer composition meters its first layer.
+static void sync_bus_meters_locked(engine_ctx *ctx) {
+    MeterRef bound[kBusCount * 2];
+    for (int b = 0; b < kBusCount; ++b) {
+        bound[b * 2 + 0] = find_meter_locked(ctx, ctx->buses[b].program_id);
+        bound[b * 2 + 1] = find_meter_locked(ctx, ctx->buses[b].preview_id);
+    }
+    std::lock_guard<std::mutex> guard(ctx->overlay.lock);
+    for (int i = 0; i < kBusCount * 2; ++i) ctx->overlay.bus_meters[i] = std::move(bound[i]);
+}
+
 void engine_set_preview(engine_ctx *ctx, int bus, const char *source_id) {
     if (!ctx || bus < 0 || bus >= kBusCount) return;
     std::lock_guard<std::recursive_mutex> guard(ctx->lock);
     Bus &b = ctx->buses[bus];
     b.preview_id = source_id ? source_id : "";
     scene_set_single(ctx, b.preview_scene, b.preview_id);
+    sync_bus_meters_locked(ctx);
     emit_state(ctx);
 }
 
@@ -1083,6 +1428,7 @@ int engine_apply_program(engine_ctx *ctx, const char *program_json) {
     obs_data_release(req);
 
     if (take) engine_take(ctx, bus, /*CUT*/ 0, 0);
+    sync_bus_meters_locked(ctx);
     emit_state(ctx);
     return 0;
 }
@@ -1137,6 +1483,7 @@ void engine_take(engine_ctx *ctx, int bus, int transition_kind, int duration_ms)
     // obs_displays, and any multiview region whose content token is PVW1/PVW2.
     rebind_bus_targets_locked(ctx, bus);
     refresh_multiview_locked(ctx);
+    sync_bus_meters_locked(ctx);
 
     emit_state(ctx);
 }
@@ -1163,13 +1510,24 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
 
     for (size_t i = 0; i < n; ++i) {
         obs_data_t *a = obs_data_array_item(arr, i);
-        const std::string sink = to_upper(obs_data_get_string(a, "sink"));
+        const std::string raw_sink = to_upper(obs_data_get_string(a, "sink"));
+        const SinkToken sink_id = parse_sink_token(raw_sink);
+        const std::string sink = sink_token_text(sink_id);  // canonical: a legacy "HDMI" becomes "HDMI1"
         const std::string source = to_upper(obs_data_get_string(a, "source"));  // PGM1 / PGM2
         const int bus = (source == "PGM2") ? 1 : 0;
         video_t *video = ctx->buses[bus].program_video;
 
-        if (sink == "HDMI") {
-            // HDMI is presented via engine_start_display(target, hwnd, display_id) from the App, which
+        if (sink_id.kind == SinkKind::None) {
+            // A sink token this build cannot place (a kind added by a newer App, an ordinal past
+            // kMaxSinksPerKind, a hand-edited config): drop the row and keep building the rest of the
+            // table - one bad sink must never cost the operator the sinks that are fine (spec §2.3).
+            blog(LOG_WARNING, "switcher-engine: unknown output sink '%s', skipped", raw_sink.c_str());
+            obs_data_release(a);
+            continue;
+        }
+
+        if (sink_id.kind == SinkKind::Hdmi) {
+            // HDMI is presented via engine_start_display("HDMI<n>", hwnd, display_id) from the App, which
             // owns the window handle. Nothing to bind here - record the assignment so the status query
             // can report which bus it carries, and let the display's own presence say whether it runs.
             ctx->outputs[sink] = OutputSink{nullptr, bus};
@@ -1183,19 +1541,19 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
 
         const char *obs_output_id = nullptr;
         obs_data_t *osettings = obs_data_create();
-        if (sink == "VCAM1") {
-            // OBS ships a SINGLE virtual-camera output. VCAM1 gets it; VCAM2 is routed to NDI instead
-            // (see README "Dual virtual camera"). VCAM2 falling through to ndi keeps both buses egressing.
+        if (sink_id.kind == SinkKind::Vcam && sink_id.ordinal == 1) {
+            // OBS ships a SINGLE virtual-camera output, and only one process can hold the camera driver.
+            // That is why the operator gets exactly one webcam sink (OutputCatalog.MaxWebcamSinks): VCAM1
+            // gets the camera, and no second webcam sink can be added to want one. VCAM2/VCAM3 fall
+            // through to an NDI sender (see README "Multiple virtual cameras") purely so a table written
+            // by an older build still egresses somewhere instead of going silent.
             obs_output_id = "virtualcam_output";
-        } else if (sink == "VCAM2") {
+        } else {
+            // Everything left (a legacy VCAM2/VCAM3 on the fallback, NDI1..NDI3) egresses as an NDI sender.
             obs_output_id = ndi_out;
             const char *nm = obs_data_get_string(a, "ndi_name");
-            obs_data_set_string(osettings, "ndi_name", (nm && *nm) ? nm : "SWITCHER VCAM2");
-        } else if (sink == "NDI1" || sink == "NDI2") {
-            obs_output_id = ndi_out;
-            const char *nm = obs_data_get_string(a, "ndi_name");
-            obs_data_set_string(osettings, "ndi_name",
-                                (nm && *nm) ? nm : (sink == "NDI1" ? "SWITCHER PGM1" : "SWITCHER PGM2"));
+            const std::string fallback = default_ndi_name(sink_id);
+            obs_data_set_string(osettings, "ndi_name", (nm && *nm) ? nm : fallback.c_str());
         }
 
         if (obs_output_id) {
@@ -1226,6 +1584,19 @@ int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json) {
     }
     if (arr) obs_data_array_release(arr);
     obs_data_release(req);
+
+    // An HDMI projector already on screen cached the transition of the bus its sink carried when the
+    // window opened, so re-routing that sink here (HDMI2: PGM1 -> PGM2) has to move the picture with it.
+    // Same reasoning as rebind_bus_targets_locked after a TAKE, and the same discipline: the pointer is
+    // swapped inside obs_enter_graphics, which parks the graphics thread so display_draw can never see a
+    // half-updated DisplayOut.
+    obs_enter_graphics();
+    for (auto &[key, disp] : ctx->displays) {
+        if (parse_sink_token(key).kind != SinkKind::Hdmi) continue;
+        obs_source_t *src = resolve_target_source(ctx, key);
+        if (src) disp.source = src;
+    }
+    obs_leave_graphics();
     return 0;
 }
 
@@ -1281,12 +1652,35 @@ static int apply_multiview_locked(engine_ctx *ctx, const char *layout_json) {
     if (cols <= 0) cols = 4;
 
     // Rebuild the multiview scene: each region maps its content token to a source, placed in its cell.
+    // The same pass collects the overlay cells (frame rect + which meter the bar reads), which are handed
+    // to the graphics thread at the end - drawing them is what makes each cell's extent visible on a
+    // full-screen multiview, where an unlit or letterboxed feed is otherwise indistinguishable from its
+    // neighbour's black.
     clear_scene(ctx->mv_scene);
     const float cell_w = static_cast<float>(ctx->canvas_w) / static_cast<float>(cols);
     const float cell_h = static_cast<float>(ctx->canvas_h) / static_cast<float>(rows);
+    std::vector<MvCell> cells;
+    cells.reserve(regions.size());
     for (const auto &rg : regions) {
-        if (rg.content.empty() || to_upper(rg.content) == "EMPTY") continue;
-        obs_source_t *src = resolve_target_source(ctx, rg.content);
+        MvCell cell;
+        cell.x = rg.col * cell_w;
+        cell.y = rg.row * cell_h;
+        cell.w = rg.cspan * cell_w;
+        cell.h = rg.rspan * cell_h;
+
+        const std::string token = to_upper(rg.content);
+        obs_source_t *src = rg.content.empty() || token == "EMPTY" ? nullptr
+                                                                   : resolve_target_source(ctx, rg.content);
+        if (src) {
+            cell.occupied = true;
+            if (rg.content.rfind("SRC:", 0) == 0) {
+                cell.meter = find_meter_locked(ctx, rg.content.substr(4));
+            } else if (const int bus = bus_index_from_token(token.c_str()); bus >= 0) {
+                cell.bus_meter = bus * 2 + (token.rfind("PVW", 0) == 0 ? 1 : 0);
+            }
+        }
+        cells.push_back(std::move(cell));
+
         if (!src) continue;
         obs_sceneitem_t *item = obs_scene_add(ctx->mv_scene, src);
         if (!item) continue;
@@ -1298,6 +1692,11 @@ static int apply_multiview_locked(engine_ctx *ctx, const char *layout_json) {
         obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_SCALE_INNER);
         obs_sceneitem_set_bounds(item, &bounds);
         obs_sceneitem_set_pos(item, &pos);
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(ctx->overlay.lock);
+        ctx->overlay.cells = std::move(cells);
     }
 
     obs_data_release(req);
@@ -1315,6 +1714,12 @@ static void display_draw(void *param, uint32_t cx, uint32_t cy) {
     gs_ortho(0.0f, static_cast<float>(disp->base_w), 0.0f, static_cast<float>(disp->base_h),
              -100.0f, 100.0f);
     obs_source_video_render(disp->source);
+    if (disp->overlay && disp->ctx) {
+        // Scale the line weight with the canvas so the frames stay visible at 4K and don't swamp a
+        // 720p multiview: ~3 px at 1080p.
+        const float thickness = std::max(2.0f, std::floor(static_cast<float>(disp->base_h) / 360.0f));
+        draw_mv_overlay(disp->ctx, thickness);
+    }
     gs_viewport_pop();
     gs_projection_pop();
 }
@@ -1329,10 +1734,15 @@ int engine_start_display(engine_ctx *ctx, const char *target, void *hwnd, int di
     // Replace any existing display for this target.
     engine_stop_display(ctx, target);
 
-    DisplayOut &d = ctx->displays[target];
+    // Sink targets are keyed canonically ("HDMI" -> "HDMI1"): engine_get_output_status decides whether an
+    // HDMI sink is running by looking its own token up in this map, so the two spellings must not diverge.
+    const std::string key = display_key(target);
+    DisplayOut &d = ctx->displays[key];
     d.source = src;
     d.base_w = ctx->canvas_w;
     d.base_h = ctx->canvas_h;
+    d.ctx = ctx;
+    d.overlay = to_upper(target) == "MULTIVIEW";  // cell frames + audio bars, full-screen multiview only
 
     struct gs_init_data gi = {};
 #ifdef _WIN32
@@ -1348,7 +1758,7 @@ int engine_start_display(engine_ctx *ctx, const char *target, void *hwnd, int di
     (void)display_id;  // physical display selection is done App-side by placing the HWND on that monitor
 
     d.display = obs_display_create(&gi, 0);
-    if (!d.display) { ctx->displays.erase(target); return 3; }
+    if (!d.display) { ctx->displays.erase(key); return 3; }
     obs_display_add_draw_callback(d.display, display_draw, &d);
     return 0;
 }
@@ -1356,7 +1766,7 @@ int engine_start_display(engine_ctx *ctx, const char *target, void *hwnd, int di
 void engine_stop_display(engine_ctx *ctx, const char *target) {
     if (!ctx || !target) return;
     std::lock_guard<std::recursive_mutex> guard(ctx->lock);
-    auto it = ctx->displays.find(target);
+    auto it = ctx->displays.find(display_key(target));
     if (it == ctx->displays.end()) return;
     if (it->second.display) {
         obs_display_remove_draw_callback(it->second.display, display_draw, &it->second);
@@ -1390,8 +1800,11 @@ const char *engine_get_output_status(engine_ctx *ctx) {
     // no way to see that from the routing table alone.
     obs_data_array_t *arr = obs_data_array_create();
     for (const auto &[sink, out] : ctx->outputs) {
-        const bool running = sink == "HDMI"
-            ? ctx->displays.count(out.bus == 1 ? "PGM2" : "PGM1") > 0
+        // An HDMI sink binds no obs_output - the App presents it - so "running" for it means a projector
+        // window is currently attached to *that* sink. Keyed by the sink token, not by the bus: two HDMI
+        // sinks can carry the same bus, and closing one of their windows must only darken that one.
+        const bool running = parse_sink_token(sink).kind == SinkKind::Hdmi
+            ? ctx->displays.count(sink) > 0
             : out.output && obs_output_active(out.output);
 
         obs_data_t *item = obs_data_create();

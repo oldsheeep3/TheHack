@@ -31,7 +31,10 @@ extern "C" {
 
 typedef struct engine_ctx engine_ctx;
 
-/* target identifiers used by taps/displays: "PGM1" "PGM2" "PVW1" "PVW2" "MULTIVIEW" "SRC:<id>". */
+/* target identifiers used by taps/displays: "PGM1" "PGM2" "PVW1" "PVW2" "MULTIVIEW" "SRC:<id>", plus
+ * "HDMI1".."HDMI3" for displays. An HDMI target renders the program of whichever bus that sink carries
+ * in the current output table (bus 0 when it carries none), so two HDMI projectors showing the same bus
+ * still address two distinct displays - which addressing them as "PGM1"/"PGM2" could not do. */
 typedef void (*engine_frame_cb)(void *user, const char *target,
                                 const uint8_t *bgra, int width, int height, int stride);
 typedef void (*engine_state_cb)(void *user, const char *state_json);
@@ -64,6 +67,16 @@ SWITCHER_ENGINE_API void engine_set_pip(engine_ctx *ctx, int bus,
 SWITCHER_ENGINE_API void engine_take(engine_ctx *ctx, int bus, int transition_kind, int duration_ms);
 
 /* outputs / multiview / display */
+
+/* Replaces the whole sink table: {"outputs":[{"sink":"VCAM1","source":"PGM1","ndi_name":"..."}, ...]}.
+ * Sink tokens are VCAM1..VCAM3, HDMI1..HDMI3 and NDI1..NDI3, and the ordinal-less "HDMI" an older
+ * runtime-config.json may still carry is read as "HDMI1". The operator builds the table, but only from
+ * one webcam, up to three HDMI and up to three NDI sinks, six in all (Switcher.Contracts.OutputCatalog):
+ * VCAM2/VCAM3 parse only so tables written before that ceiling keep loading. VCAM1 takes the OBS virtual
+ * camera - there is only one, which is the whole reason webcams cap at one - while VCAM2/VCAM3 and
+ * NDI1..NDI3 egress as NDI senders. HDMI sinks bind no output here: the App presents them with
+ * engine_start_display. An unrecognised token is skipped and a sink that fails to start is reported by
+ * engine_get_output_status - neither fails the call. Returns 0 unless the payload itself is unusable. */
 SWITCHER_ENGINE_API int engine_apply_outputs(engine_ctx *ctx, const char *outputs_json);
 
 /* --- audio ---------------------------------------------------------------
@@ -76,8 +89,9 @@ SWITCHER_ENGINE_API void engine_set_source_audio(engine_ctx *ctx, const char *id
 /* Which sinks from the last engine_apply_outputs are actually egressing:
  * {"outputs":[{"sink":"VCAM2","source":"PGM2","running":false}, ...]}. An assignment can be accepted
  * and still never start (no NDI runtime, virtual camera held by another app), so this is how the
- * caller learns a program bus has no working output. Pointer owned by the engine, valid until the
- * next call on the same ctx. */
+ * caller learns a program bus has no working output. An HDMI sink owns no output of its own, so it
+ * reads as running exactly while a projector started with its token is attached. Pointer owned by the
+ * engine, valid until the next call on the same ctx. */
 SWITCHER_ENGINE_API const char *engine_get_output_status(engine_ctx *ctx);
 
 /* Active audio render endpoints as JSON ([{"id","name","is_default"}, ...]). The returned pointer is
